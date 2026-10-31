@@ -1,0 +1,62 @@
+# Template for ./mixed.sh keybundle, which fills in IMAGE (the glob of its copy of the spike image) and KEY (the public
+# key it makes for the run). The image has no signature, only two bundle referrers (provenance, vuln) signed with that
+# key: the signature check (check 2 of svp-policy), the vuln check (check 3) and the provenance check (check 7), each
+# with its own message.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: attest-spike-keybundle
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  evaluation:
+    background:
+      enabled: false
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "@IMAGE@"
+  validationConfigurations:
+    mutateDigest: false
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: key
+      cosign:
+        key:
+          data: |
+            @KEY@
+        # Nothing was uploaded to a transparency log.
+        ctlog:
+          insecureIgnoreTlog: true
+  attestations:
+    - name: vuln
+      intoto:
+        type: https://cosign.sigstore.dev/attestation/vuln/v1
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  variables:
+    - name: matched
+      expression: images.containers + images.initContainers + images.ephemeralContainers
+  validations:
+    - expression: variables.matched.all(i, verifyImageSignatures(i, [attestors.key]) > 0)
+      message: image without a signature
+    - expression: variables.matched.all(i, verifyAttestationSignatures(i, attestations.vuln, [attestors.key]) > 0)
+      message: image without a vuln attestation
+    - expression: variables.matched.all(i, verifyAttestationSignatures(i, attestations.provenance, [attestors.key]) > 0)
+      message: image without a provenance attestation
+    # Reached only when the three pass: says so, so a pass is never an empty evaluation.
+    - expression: "false"
+      messageExpression: >-
+        'all three checks passed, signature counted from the bundles alone; vuln scanFinishedOn=' +
+        variables.matched.map(i, extractPayload(i, attestations.vuln).predicate.metadata.scanFinishedOn).join(',') +
+        ' provenance builder.id=' +
+        variables.matched.map(i, extractPayload(i, attestations.provenance).predicate.runDetails.builder.id).join(',')

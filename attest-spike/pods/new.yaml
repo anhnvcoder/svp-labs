@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: new
+  namespace: spike
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-labs/attest-spike@sha256:6ef501da57a3f43709b43d4cf0619a3753edcfdb10d9c2e1119567401654f8a7

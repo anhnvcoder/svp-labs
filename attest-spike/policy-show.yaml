@@ -1,0 +1,86 @@
+# Control of policy.yaml: the same variables, one validation that always refuses and prints what extractPayload read
+# from the verified provenance of each image, old format and new: the fields the four checks compare are really read,
+# not defaulted to ''. The message names variables.unproven first: extractPayload reads only a payload that
+# verifyAttestationSignatures verified earlier in the same evaluation.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: attest-spike-show
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 30
+  evaluation:
+    background:
+      enabled: false
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: spike
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "ghcr.io/anhnvcoder/svp-backend/gateway@*"
+    - glob: "ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@*"
+    - glob: "ghcr.io/anhnvcoder/svp-labs/attest-spike@*"
+  validationConfigurations:
+    mutateDigest: false
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: backend
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subject: "https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main"
+    - name: labs
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subject: "https://github.com/anhnvcoder/svp-labs/.github/workflows/attest-spike.yml@refs/heads/main"
+  attestations:
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  variables:
+    - name: matched
+      expression: images.containers + images.initContainers + images.ephemeralContainers
+    # The attestor, subject, repository and ref of the source an image belongs to, picked by its prefix.
+    - name: unproven
+      expression: >-
+        variables.matched.filter(i,
+          (i.startsWith('ghcr.io/anhnvcoder/svp-backend/') && verifyAttestationSignatures(i, attestations.provenance, [attestors.backend]) == 0) ||
+          (i.startsWith('ghcr.io/anhnvcoder/svp-labs/') && verifyAttestationSignatures(i, attestations.provenance, [attestors.labs]) == 0))
+    - name: wrongBuilder
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?runDetails.?builder.?id.orValue('') !=
+          (i.startsWith('ghcr.io/anhnvcoder/svp-backend/') ? 'https://github.com/anhnvcoder/svp-backend/.github/workflows/images.yml@refs/heads/main' :
+           i.startsWith('ghcr.io/anhnvcoder/svp-labs/') ? 'https://github.com/anhnvcoder/svp-labs/.github/workflows/attest-spike.yml@refs/heads/main' : ''))
+    - name: wrongRepository
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?repository.orValue('') !=
+          (i.startsWith('ghcr.io/anhnvcoder/svp-backend/') ? 'https://github.com/anhnvcoder/svp-backend' :
+           i.startsWith('ghcr.io/anhnvcoder/svp-labs/') ? 'https://github.com/anhnvcoder/svp-labs' : ''))
+    - name: wrongRef
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?ref.orValue('') != 'refs/heads/main')
+  validations:
+    # Always refuses, and says in its message what extractPayload read from the verified provenance of each image.
+    - expression: "false"
+      messageExpression: >-
+        'unproven=' + variables.unproven.join(',') + '; read: ' + variables.matched.map(i, i + ' -> builder.id=' +
+          extractPayload(i, attestations.provenance).?predicate.?runDetails.?builder.?id.orValue('<none>') + ' repository=' +
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?repository.orValue('<none>') + ' ref=' +
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?ref.orValue('<none>')).join('; ')

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: old
+  namespace: spike
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-backend/gateway@sha256:15c32ac48a6fd3b67ebe7f0e9549eb9c7accfafdbdd93ece96a273142e634e3c

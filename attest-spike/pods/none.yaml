@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: none
+  namespace: spike
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-backend/drill-no-provenance@sha256:8c9d49f382f08a526a30fbec0c54d078a0bf61605de13552039462bdaef56c98
