@@ -1,0 +1,82 @@
+# Spike: builds one tiny image (attest-spike/image, FROM scratch), pushes it to GHCR and attests its build provenance with
+# actions/attest, which writes a Sigstore bundle and pushes it to the registry next to the image. The result is the input
+# of the spike in attest-spike/README.md: can the pinned Kyverno ImageValidatingPolicy verify that bundle?
+#
+# Security rules of this file:
+#   - permissions: {} here; the one job asks only for what it needs: read the code, push the package, mint the OIDC
+#     token for the keyless certificate, write the attestation.
+#   - Every action is pinned to a full commit SHA (the tag in the comment is for people), even though this repository
+#     allows any action.
+#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
+#   - The image is pushed with the job's GITHUB_TOKEN; no other secret exists here (public repository).
+name: attest-spike
+
+on:
+  push:
+    paths:
+      - "attest-spike/**"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/anhnvcoder/svp-labs/attest-spike
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push
+        id: build
+        run: |
+          # BuildKit's own provenance and SBOM stay off: the image is then one plain manifest, and the only provenance
+          # attached to it is the one actions/attest makes below.
+          docker buildx build \
+            --provenance=false --sbom=false \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --tag "$IMAGE:${GITHUB_SHA::12}" \
+            --metadata-file "$RUNNER_TEMP/build.json" \
+            --push attest-spike/image
+          digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/build.json")
+          if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::no image digest in the build metadata: $digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          # Storage records exist only for repositories owned by an organization; this one belongs to a user.
+          create-storage-record: false
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+        run: |
+          {
+            echo "### attest-spike"
+            echo
+            echo "- image: \`$IMAGE@$DIGEST\`"
+            echo "- attestation: $ATTESTATION_URL"
+            echo "- signer: \`https://github.com/$GITHUB_REPOSITORY/.github/workflows/attest-spike.yml@$GITHUB_REF\`"
+          } >> "$GITHUB_STEP_SUMMARY"
