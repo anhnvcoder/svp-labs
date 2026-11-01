@@ -1,6 +1,6 @@
 # Spike, the caller: releases the image of reusable-spike/image twice, once through the reusable workflow and once
-# through the composite action, each named by its full path at the same commit CALLED_SHA, as svp-frontend would name
-# the backend's (one repository here, so it is the same owner/repo, never ./). CALLED_SHA is a commit before the one
+# through the composite action, each named by its full path at the same commit fa3cf13d77877fa8fde4ca8fe1126e068a304253, as svp-frontend would name
+# the backend's (one repository here, so it is the same owner/repo, never ./). fa3cf13d77877fa8fde4ca8fe1126e068a304253 is a commit before the one
 # that wrote it here (uses: takes no expression), so the run log tells the commit of the scripts apart from the commit
 # of the run. Findings in reusable-spike/README.md.
 #
@@ -24,10 +24,10 @@ jobs:
       packages: write
       id-token: write
       attestations: write
-    uses: anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@CALLED_SHA
+    uses: anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@fa3cf13d77877fa8fde4ca8fe1126e068a304253
     with:
       # The same commit again, only to compare with what the called workflow finds by itself.
-      scripts-ref: CALLED_SHA
+      scripts-ref: fa3cf13d77877fa8fde4ca8fe1126e068a304253
 
   composite:
     runs-on: ubuntu-24.04
@@ -43,6 +43,6 @@ jobs:
           path: code
           persist-credentials: false
 
-      - uses: anhnvcoder/svp-labs/.github/actions/reusable-spike@CALLED_SHA
+      - uses: anhnvcoder/svp-labs/.github/actions/reusable-spike@fa3cf13d77877fa8fde4ca8fe1126e068a304253
         with:
           code-root: code
