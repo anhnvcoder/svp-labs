@@ -1,0 +1,147 @@
+# Spike, the reusable workflow: called by reusable-spike-caller.yml with its full path at a commit
+# (anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@<sha>), as another repository would call it. It
+# builds the caller's tree, signs and attests the image keyless (cosign, Sigstore bundle format) and attests its build
+# provenance (actions/attest), so the certificate shows which identity a reusable workflow signs with. Before that it
+# prints what it can learn about its own commit (contexts, the claims of its OIDC token, the scripts-ref input) and
+# checks out its own repository at the commit the token names, then runs the release script from that checkout: the
+# question is whether a reusable workflow can pin the scripts it runs without repeating the sha. Findings in
+# reusable-spike/README.md.
+#
+# Security rules of this file:
+#   - permissions: {} here; the one job asks only for what it needs, and gets no more than the calling job grants.
+#   - Every action is pinned to a full commit SHA (the tag in the comment is for people).
+#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
+#   - The OIDC token is requested once to print its claims (the payload only, never the token itself).
+#   - Inputs reach scripts through env:, never ${{ }} inside run:.
+name: reusable-spike-called
+
+on:
+  workflow_call:
+    inputs:
+      scripts-ref:
+        description: "The commit the caller wrote after @ in uses: (compared with what the job finds by itself)"
+        type: string
+        required: true
+    outputs:
+      digest:
+        description: "Digest of the image signed in this workflow"
+        value: ${{ jobs.release.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    outputs:
+      digest: ${{ steps.release.outputs.digest }}
+    env:
+      IMAGE: ghcr.io/anhnvcoder/svp-labs/reusable-spike
+    steps:
+      - name: Contexts of a called workflow
+        env:
+          CTX_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CTX_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          CTX_REPOSITORY: ${{ github.repository }}
+          CTX_SHA: ${{ github.sha }}
+          CTX_REF: ${{ github.ref }}
+          CTX_JOB: ${{ toJSON(job) }}
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+        run: |
+          echo "github.workflow_ref=$CTX_WORKFLOW_REF"
+          echo "github.workflow_sha=$CTX_WORKFLOW_SHA"
+          echo "github.repository=$CTX_REPOSITORY github.sha=$CTX_SHA github.ref=$CTX_REF"
+          echo "inputs.scripts-ref=$SCRIPTS_REF"
+          echo "job context:"
+          printf '%s\n' "$CTX_JOB"
+          echo "GITHUB_* variables:"
+          env | grep '^GITHUB_' | sort
+
+      - name: Claims of the OIDC token
+        id: claims
+        run: |
+          # The token goes into a variable and is never printed; only its payload (the claims) is decoded and shown.
+          token=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sigstore" | jq -r .value)
+          payload=$(cut -d. -f2 <<<"$token" | tr '_-' '/+')
+          while [ $(( ${#payload} % 4 )) -ne 0 ]; do payload="$payload="; done
+          claims=$(base64 -d <<<"$payload")
+          unset token payload
+          jq -S . <<<"$claims"
+          ref=$(jq -r .job_workflow_ref <<<"$claims")
+          sha=$(jq -r .job_workflow_sha <<<"$claims")
+          # job_workflow_ref is <owner>/<repo>/<path>@<ref>: the repository is its first two segments.
+          repo=$(cut -d/ -f1-2 <<<"$ref")
+          if ! [[ $sha =~ ^[0-9a-f]{40}$ && $repo =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::no job_workflow_sha or job_workflow_ref in the token: sha=$sha ref=$ref"
+            exit 1
+          fi
+          echo "repository=$repo" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Compare with the input
+        env:
+          SCRIPTS_REF: ${{ inputs.scripts-ref }}
+          CLAIM_SHA: ${{ steps.claims.outputs.sha }}
+        run: |
+          if [ "$SCRIPTS_REF" = "$CLAIM_SHA" ]; then
+            echo "job_workflow_sha equals inputs.scripts-ref ($CLAIM_SHA)"
+          else
+            echo "::warning::job_workflow_sha $CLAIM_SHA differs from inputs.scripts-ref $SCRIPTS_REF"
+          fi
+
+      # The caller's tree, at the commit of the run: what is built.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: code
+          persist-credentials: false
+
+      # This workflow's own repository at the commit the token names: where the scripts run from.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ steps.claims.outputs.repository }}
+          ref: ${{ steps.claims.outputs.sha }}
+          path: scripts
+          persist-credentials: false
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build, sign, attest vuln
+        id: release
+        run: bash scripts/reusable-spike/release.sh reusable code
+
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.release.outputs.digest }}
+          push-to-registry: true
+          # Storage records exist only for repositories owned by an organization; this one belongs to a user.
+          create-storage-record: false
+
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.release.outputs.digest }}
+          ATTESTATION_URL: ${{ steps.attest.outputs.attestation-url }}
+          CLAIM_SHA: ${{ steps.claims.outputs.sha }}
+        run: |
+          {
+            echo "### reusable-spike: reusable workflow"
+            echo
+            echo "- image: \`$IMAGE@$DIGEST\`"
+            echo "- attestation: $ATTESTATION_URL"
+            echo "- scripts at job_workflow_sha: \`$CLAIM_SHA\`"
+          } >> "$GITHUB_STEP_SUMMARY"
