@@ -1,0 +1,4 @@
+# Every file has one owner, the repository owner. No ruleset asks for a Code Owner review here: no bot opens pull
+# requests in this repository, so the owner is the only author and a required review would only block them. The file
+# keeps the owner in GitHub's review requests and in the community profile.
+*           @anhnvcoder
