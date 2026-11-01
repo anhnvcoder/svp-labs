@@ -9,3 +9,4 @@ không `.env`, không output thật.
 | Bài | Nội dung | Trạng thái |
 | --- | --- | --- |
 | [`dora/`](dora/README.md) | Năm chỉ số DORA tính từ bản ghi Deployment `stg` của `svp-gitops`, bản đóng băng của `dora.sh` (đã rời đường chính) | Đã dựng; so với Apache DevLake: chưa làm |
+| [`attest-spike/`](attest-spike/README.md) | Kyverno (bản lab ghim) có xác minh được provenance của `actions/attest` (Sigstore bundle), và một policy nhận cả định dạng cũ lẫn mới không | Đã thử bằng Kyverno CLI; kết luận: chuyển phải gồm chữ ký, `vuln`, provenance trong một bản phát hành |

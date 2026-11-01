@@ -104,7 +104,7 @@ cho cả lượt) mà chọn định dạng cùng cách; mọi ca trên cho cùn
 ## Giới hạn gặp
 
 - **Chưa kiểm admission thật** (webhook, `timeoutSeconds`, cache xác minh của Kyverno, `failurePolicy`): CLI chạy cùng engine đánh giá policy
-  nhưng không qua API server. Không dựng cluster `svp-spike` vì card chỉ dựng khi CLI không đánh giá được.
+  nhưng không qua API server. Không dựng cluster `svp-spike`: kế hoạch chỉ dựng khi CLI không đánh giá được.
 - **Chưa kiểm template `svp-policy` thật** với `requireProvenance: true` trên image mới: `policy.yaml`, `policy-signed.yaml` chép phép 2, 3,
   7–10; phép 4–6 (nền tảng, CRITICAL, tuổi của `vuln`) chưa chạy trên một `vuln` dạng bundle (`./mixed.sh keybundle` chỉ cho thấy
   `extractPayload` đọc được `scanFinishedOn` của nó).
