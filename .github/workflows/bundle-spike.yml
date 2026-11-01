@@ -1,0 +1,183 @@
+# Spike: a release whose signature, vuln attestation and build provenance are all Sigstore bundles (OCI referrers),
+# signed keyless by this workflow, and what the daily rescan does to such a release. The results are in
+# bundle-spike/README.md.
+#
+#   build   builds bundle-spike/image FROM scratch for linux/amd64 and linux/arm64, pushes the two manifests and an
+#           index of them, twice: variant release and variant novuln (same content, another label, so another
+#           digest). Release: cosign sign, cosign attest --type vuln (bundle-spike/vuln-predicate.sh, scanFinishedOn
+#           now) and actions/attest, all three bundles. Novuln: cosign sign and actions/attest only, the control
+#           without a vuln attestation.
+#   rescan  attests a new vuln predicate (scanFinishedOn now) on the index DIGEST, with --replace as the daily rescan
+#           of svp-backend does: whether --replace replaces a bundle or adds one.
+#   prune   keeps the vuln bundle of DIGEST with the newest scanFinishedOn and removes the others (registry API, then
+#           the GitHub REST API on its package version): bundle-spike/referrers.sh prune.
+# Every mode ends by listing the bundle referrers of its digests (bundle-spike/referrers.sh list).
+#
+# Security rules of this file:
+#   - permissions: {} here; the one job asks only for what it needs: read the code, push and delete package versions,
+#     mint the OIDC token for the keyless certificates, write the provenance attestation.
+#   - Every action is pinned to a full commit SHA (the tag in the comment is for people).
+#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
+#   - The dispatch input digest reaches the shell through env only, and is checked against sha256:<64 hex>.
+#   - The image is pushed with the job's GITHUB_TOKEN; no other secret exists here (public repository).
+name: bundle-spike
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "build, rescan (a new vuln bundle on digest) or prune (keep only the newest vuln bundle of digest)"
+        type: choice
+        options: [build, rescan, prune]
+        default: build
+      digest:
+        description: "rescan and prune: the index digest of variant release (sha256:...) that build printed"
+        type: string
+        default: ""
+
+permissions: {}
+
+# One run at a time: a rescan and a prune of the same digest must not interleave.
+concurrency:
+  group: bundle-spike
+  cancel-in-progress: false
+
+jobs:
+  spike:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    env:
+      IMAGE: ghcr.io/anhnvcoder/svp-labs/bundle-spike
+      MODE: ${{ inputs.mode }}
+      INPUT_DIGEST: ${{ inputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check the inputs
+        run: |
+          case $MODE in
+            build) ;;
+            rescan | prune)
+              if ! [[ $INPUT_DIGEST =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::mode $MODE needs input digest as sha256:<64 hex>"
+                exit 1
+              fi ;;
+            *) echo "::error::unknown mode"; exit 1 ;;
+          esac
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.4
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: printf '%s' "$GH_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build and push
+        id: build
+        if: ${{ inputs.mode == 'build' }}
+        run: |
+          # One plain manifest per platform (BuildKit's own provenance and SBOM off: the only attestations are the
+          # bundles below), then an index of the two, as svp-backend releases are. FROM scratch has no RUN step, so
+          # linux/arm64 builds on this amd64 runner without emulation.
+          for variant in release novuln; do
+            digests=()
+            for arch in amd64 arm64; do
+              docker buildx build \
+                --platform "linux/$arch" --provenance=false --sbom=false \
+                --build-arg "VARIANT=$variant" \
+                --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+                --tag "$IMAGE:$variant-$arch-${GITHUB_SHA::12}" \
+                --metadata-file "$RUNNER_TEMP/$variant-$arch.json" \
+                --push bundle-spike/image
+              digest=$(jq -r '."containerimage.digest"' "$RUNNER_TEMP/$variant-$arch.json")
+              if ! [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]]; then
+                echo "::error::no digest in the build metadata of $variant linux/$arch: $digest"
+                exit 1
+              fi
+              digests+=("$IMAGE@$digest")
+            done
+            docker buildx imagetools create --tag "$IMAGE:$variant-${GITHUB_SHA::12}" "${digests[@]}"
+            index=$(docker buildx imagetools inspect "$IMAGE:$variant-${GITHUB_SHA::12}" --format '{{json .Manifest}}' |
+              jq -r .digest)
+            if ! [[ $index =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::no index digest for $variant: $index"
+              exit 1
+            fi
+            echo "$variant=$index" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: Sign (cosign, Sigstore bundle)
+        if: ${{ inputs.mode == 'build' }}
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          NOVULN: ${{ steps.build.outputs.novuln }}
+        run: |
+          for digest in "$RELEASE" "$NOVULN"; do
+            cosign sign --yes --new-bundle-format=true "$IMAGE@$digest"
+          done
+
+      - name: Attest vuln (cosign, Sigstore bundle)
+        if: ${{ inputs.mode == 'build' || inputs.mode == 'rescan' }}
+        env:
+          DIGEST: ${{ inputs.mode == 'build' && steps.build.outputs.release || inputs.digest }}
+        run: |
+          docker buildx imagetools inspect --raw "$IMAGE@$DIGEST" > "$RUNNER_TEMP/index.json"
+          bundle-spike/vuln-predicate.sh "$RUNNER_TEMP/vuln.json" "$RUNNER_TEMP/index.json" "$IMAGE@$DIGEST"
+          # --replace as rescan.sh of svp-backend passes it (build attests the first one, so it has nothing to replace).
+          replace=()
+          [ "$MODE" = build ] || replace=(--replace)
+          cosign attest --yes --new-bundle-format=true ${replace[@]+"${replace[@]}"} --type vuln \
+            --predicate "$RUNNER_TEMP/vuln.json" "$IMAGE@$DIGEST"
+
+      - name: Attest build provenance (release)
+        if: ${{ inputs.mode == 'build' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.release }}
+          push-to-registry: true
+          # Storage records exist only for repositories owned by an organization; this one belongs to a user.
+          create-storage-record: false
+
+      - name: Attest build provenance (novuln)
+        if: ${{ inputs.mode == 'build' }}
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.novuln }}
+          push-to-registry: true
+          create-storage-record: false
+
+      - name: Remove the older vuln bundles
+        if: ${{ inputs.mode == 'prune' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ORAS_CONFIG=$HOME/.docker/config.json bundle-spike/referrers.sh prune "$IMAGE@$INPUT_DIGEST"
+
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          RELEASE: ${{ steps.build.outputs.release }}
+          NOVULN: ${{ steps.build.outputs.novuln }}
+        run: |
+          {
+            echo "### bundle-spike ($MODE)"
+            echo
+            echo "- signer: \`$GITHUB_SERVER_URL/$GITHUB_WORKFLOW_REF\`"
+            for digest in ${RELEASE:-$INPUT_DIGEST} $NOVULN; do
+              echo "- image: \`$IMAGE@$digest\`"
+              echo
+              echo '```'
+              ORAS_CONFIG=$HOME/.docker/config.json bundle-spike/referrers.sh list "$IMAGE@$digest" || echo "(listing failed)"
+              echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

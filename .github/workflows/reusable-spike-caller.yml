@@ -1,0 +1,48 @@
+# Spike, the caller: releases the image of reusable-spike/image twice, once through the reusable workflow and once
+# through the composite action, each named by its full path at the same commit fa3cf13d77877fa8fde4ca8fe1126e068a304253, as svp-frontend would name
+# the backend's (one repository here, so it is the same owner/repo, never ./). fa3cf13d77877fa8fde4ca8fe1126e068a304253 is a commit before the one
+# that wrote it here (uses: takes no expression), so the run log tells the commit of the scripts apart from the commit
+# of the run. Findings in reusable-spike/README.md.
+#
+# Security rules of this file:
+#   - permissions: {} here; each job grants only what signing needs: read the code, push the package, mint the OIDC
+#     token for the keyless certificate, write the attestation. The reusable workflow gets no more than its job grants.
+#   - Every action and the reusable workflow are pinned to a full commit SHA; no secret is passed (public repository).
+#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
+#   - Runs only when dispatched: it signs, so nothing runs it on a push or a pull request.
+name: reusable-spike-caller
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  reusable:
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    uses: anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@fa3cf13d77877fa8fde4ca8fe1126e068a304253
+    with:
+      # The same commit again, only to compare with what the called workflow finds by itself.
+      scripts-ref: fa3cf13d77877fa8fde4ca8fe1126e068a304253
+
+  composite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: code
+          persist-credentials: false
+
+      - uses: anhnvcoder/svp-labs/.github/actions/reusable-spike@fa3cf13d77877fa8fde4ca8fe1126e068a304253
+        with:
+          code-root: code
