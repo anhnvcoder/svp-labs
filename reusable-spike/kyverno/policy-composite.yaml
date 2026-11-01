@@ -1,0 +1,82 @@
+# Spike policy: svp-policy's checks 2, 3, 7, 8 and 9 unchanged in shape for a release through a composite action. Its
+# steps run in the caller's job, so every signature carries the identity of the calling workflow, as svp-policy's
+# sources table already writes it: one exact subject, a builder.id equal to it, and the calling repository.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: composite-caller
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 30
+  evaluation:
+    background:
+      enabled: false
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: spike
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "ghcr.io/anhnvcoder/svp-labs/reusable-spike@*"
+  validationConfigurations:
+    mutateDigest: false
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: source
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subject: "https://github.com/anhnvcoder/svp-labs/.github/workflows/reusable-spike-caller.yml@refs/heads/main"
+  attestations:
+    - name: vuln
+      intoto:
+        type: https://cosign.sigstore.dev/attestation/vuln/v1
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  variables:
+    - name: matched
+      expression: images.containers + images.initContainers + images.ephemeralContainers
+    - name: unsigned
+      expression: variables.matched.filter(i, verifyImageSignatures(i, [attestors.source]) == 0)
+    - name: unattested
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.vuln, [attestors.source]) == 0)
+    - name: unproven
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.provenance, [attestors.source]) == 0)
+    - name: wrongBuilder
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?runDetails.?builder.?id.orValue('') !=
+          'https://github.com/anhnvcoder/svp-labs/.github/workflows/reusable-spike-caller.yml@refs/heads/main')
+    - name: wrongRepository
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?repository.orValue('') !=
+          'https://github.com/anhnvcoder/svp-labs')
+  validations:
+    - expression: size(variables.unsigned) == 0
+      messageExpression: >-
+        'image without a keyless signature by the workflow of its source: ' + variables.unsigned.join(', ')
+    - expression: size(variables.unattested) == 0
+      messageExpression: >-
+        'image without a vuln attestation signed by the workflow of its source: ' + variables.unattested.join(', ')
+    - expression: size(variables.unproven) == 0
+      messageExpression: >-
+        'image without a provenance attestation signed by the workflow of its source: ' + variables.unproven.join(', ')
+    - expression: size(variables.wrongBuilder) == 0
+      messageExpression: >-
+        'image whose provenance names another builder than the workflow of its source: ' + variables.wrongBuilder.join(', ')
+    - expression: size(variables.wrongRepository) == 0
+      messageExpression: >-
+        'image whose provenance names another repository than its source: ' + variables.wrongRepository.join(', ')

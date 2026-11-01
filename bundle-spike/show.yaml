@@ -1,0 +1,11 @@
+    # Appended to the validations of a policy policy.sh rendered (cat policy.yaml show.yaml): reached only when the
+    # ten checks above pass, it always refuses, and its message prints what checks 4-10 read from the verified bundles.
+    - expression: "false"
+      messageExpression: >-
+        'checks 1-10 passed; read: ' + variables.matched.map(i,
+          'vuln scanFinishedOn=' + extractPayload(i, attestations.vuln).predicate.metadata.scanFinishedOn +
+          ' platforms=' + extractPayload(i, attestations.vuln).predicate.scanner.result.platforms.map(p,
+            p.platform + '@' + p.digest.substring(7, 19) + '(results ' + string(size(p.report.Results)) + ')').join(',') +
+          ' provenance builder.id=' + extractPayload(i, attestations.provenance).predicate.runDetails.builder.id +
+          ' repository=' + extractPayload(i, attestations.provenance).predicate.buildDefinition.externalParameters.workflow.repository +
+          ' ref=' + extractPayload(i, attestations.provenance).predicate.buildDefinition.externalParameters.workflow.ref).join('; ')
