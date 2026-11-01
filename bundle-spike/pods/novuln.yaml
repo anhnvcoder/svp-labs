@@ -1,0 +1,10 @@
+# Pod of case novuln: image bundle-spike variant novuln, by its index digest (run 41311972410 of bundle-spike.yml).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: novuln
+  namespace: svp
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-labs/bundle-spike@sha256:ac10945e02b7302e076cd47a9f88290ac4b8e200b8eefe570ccb2ce1278c6ed2

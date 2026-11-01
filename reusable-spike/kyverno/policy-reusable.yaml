@@ -1,0 +1,174 @@
+# Spike policies: what svp-policy would become if a repository released through a reusable workflow of another one.
+# Two policies with the same reusable-workflow identity (its SAN at any commit, subjectRegExp), each requiring one
+# calling repository: reusable-caller-a requires anhnvcoder/svp-labs, the repository that really called it;
+# reusable-caller-b requires anhnvcoder/svp-frontend, a repository that did not. Each checks, in svp-policy's order and
+# with its messages:
+#   2. a keyless signature by that identity, with the certificate extension GithubWorkflowRepository
+#      (OID 1.3.6.1.4.1.57264.1.5, the repository of the run) equal to the calling repository;
+#   3. a vuln attestation signed the same way;
+#   7. a provenance attestation signed the same way;
+#   8. its runDetails.builder.id is the reusable workflow at a commit (the SAN, so a regexp, not one string);
+#   9. its buildDefinition.externalParameters.workflow.repository is the calling repository.
+# Kyverno v1.19.1 does not read additionalExtensions (only issuer and subject reach cosign), so there 2, 3 and 7 pass for
+# any calling repository and 9 alone tells them apart; v1.19.2 passes additionalExtensions to cosign.
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: reusable-caller-a
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 30
+  evaluation:
+    background:
+      enabled: false
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: spike
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "ghcr.io/anhnvcoder/svp-labs/reusable-spike@*"
+  validationConfigurations:
+    mutateDigest: false
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: source
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subjectRegExp: '^https://github\.com/anhnvcoder/svp-labs/\.github/workflows/reusable-spike-called\.yml@[0-9a-f]{40}$'
+          additionalExtensions:
+            githubWorkflowRepository: anhnvcoder/svp-labs
+  attestations:
+    - name: vuln
+      intoto:
+        type: https://cosign.sigstore.dev/attestation/vuln/v1
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  variables:
+    - name: matched
+      expression: images.containers + images.initContainers + images.ephemeralContainers
+    - name: unsigned
+      expression: variables.matched.filter(i, verifyImageSignatures(i, [attestors.source]) == 0)
+    - name: unattested
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.vuln, [attestors.source]) == 0)
+    - name: unproven
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.provenance, [attestors.source]) == 0)
+    - name: wrongBuilder
+      expression: >-
+        variables.matched.filter(i, !extractPayload(i, attestations.provenance).?predicate.?runDetails.?builder.?id.orValue('').matches(
+          '^https://github\\.com/anhnvcoder/svp-labs/\\.github/workflows/reusable-spike-called\\.yml@[0-9a-f]{40}$'))
+    - name: wrongRepository
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?repository.orValue('') !=
+          'https://github.com/anhnvcoder/svp-labs')
+  validations:
+    - expression: size(variables.unsigned) == 0
+      messageExpression: >-
+        'image without a keyless signature by the workflow of its source: ' + variables.unsigned.join(', ')
+    - expression: size(variables.unattested) == 0
+      messageExpression: >-
+        'image without a vuln attestation signed by the workflow of its source: ' + variables.unattested.join(', ')
+    - expression: size(variables.unproven) == 0
+      messageExpression: >-
+        'image without a provenance attestation signed by the workflow of its source: ' + variables.unproven.join(', ')
+    - expression: size(variables.wrongBuilder) == 0
+      messageExpression: >-
+        'image whose provenance names another builder than the workflow of its source: ' + variables.wrongBuilder.join(', ')
+    - expression: size(variables.wrongRepository) == 0
+      messageExpression: >-
+        'image whose provenance names another repository than its source: ' + variables.wrongRepository.join(', ')
+---
+apiVersion: policies.kyverno.io/v1
+kind: ImageValidatingPolicy
+metadata:
+  name: reusable-caller-b
+spec:
+  validationActions: [Deny]
+  failurePolicy: Fail
+  webhookConfiguration:
+    timeoutSeconds: 30
+  evaluation:
+    background:
+      enabled: false
+  autogen:
+    podControllers:
+      controllers: []
+  matchConstraints:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: spike
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: [v1]
+        operations: [CREATE, UPDATE]
+        resources: [pods]
+  matchImageReferences:
+    - glob: "ghcr.io/anhnvcoder/svp-labs/reusable-spike@*"
+  validationConfigurations:
+    mutateDigest: false
+    verifyDigest: true
+    required: true
+  attestors:
+    - name: source
+      cosign:
+        keyless:
+          identities:
+            - issuer: "https://token.actions.githubusercontent.com"
+              subjectRegExp: '^https://github\.com/anhnvcoder/svp-labs/\.github/workflows/reusable-spike-called\.yml@[0-9a-f]{40}$'
+          additionalExtensions:
+            githubWorkflowRepository: anhnvcoder/svp-frontend
+  attestations:
+    - name: vuln
+      intoto:
+        type: https://cosign.sigstore.dev/attestation/vuln/v1
+    - name: provenance
+      intoto:
+        type: https://slsa.dev/provenance/v1
+  variables:
+    - name: matched
+      expression: images.containers + images.initContainers + images.ephemeralContainers
+    - name: unsigned
+      expression: variables.matched.filter(i, verifyImageSignatures(i, [attestors.source]) == 0)
+    - name: unattested
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.vuln, [attestors.source]) == 0)
+    - name: unproven
+      expression: variables.matched.filter(i, verifyAttestationSignatures(i, attestations.provenance, [attestors.source]) == 0)
+    - name: wrongBuilder
+      expression: >-
+        variables.matched.filter(i, !extractPayload(i, attestations.provenance).?predicate.?runDetails.?builder.?id.orValue('').matches(
+          '^https://github\\.com/anhnvcoder/svp-labs/\\.github/workflows/reusable-spike-called\\.yml@[0-9a-f]{40}$'))
+    - name: wrongRepository
+      expression: >-
+        variables.matched.filter(i,
+          extractPayload(i, attestations.provenance).?predicate.?buildDefinition.?externalParameters.?workflow.?repository.orValue('') !=
+          'https://github.com/anhnvcoder/svp-frontend')
+  validations:
+    - expression: size(variables.unsigned) == 0
+      messageExpression: >-
+        'image without a keyless signature by the workflow of its source: ' + variables.unsigned.join(', ')
+    - expression: size(variables.unattested) == 0
+      messageExpression: >-
+        'image without a vuln attestation signed by the workflow of its source: ' + variables.unattested.join(', ')
+    - expression: size(variables.unproven) == 0
+      messageExpression: >-
+        'image without a provenance attestation signed by the workflow of its source: ' + variables.unproven.join(', ')
+    - expression: size(variables.wrongBuilder) == 0
+      messageExpression: >-
+        'image whose provenance names another builder than the workflow of its source: ' + variables.wrongBuilder.join(', ')
+    - expression: size(variables.wrongRepository) == 0
+      messageExpression: >-
+        'image whose provenance names another repository than its source: ' + variables.wrongRepository.join(', ')

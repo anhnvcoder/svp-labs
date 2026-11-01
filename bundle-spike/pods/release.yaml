@@ -1,0 +1,10 @@
+# Pod of case release: image bundle-spike variant release, by its index digest (run 41311972410 of bundle-spike.yml).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: release
+  namespace: svp
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-labs/bundle-spike@sha256:1f6154f1d726771265309311d0114383cd086c4f27eb9dafb40fb0a8de15f866

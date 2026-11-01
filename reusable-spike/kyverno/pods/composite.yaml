@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: composite
+  namespace: spike
+spec:
+  containers:
+    - name: c
+      image: ghcr.io/anhnvcoder/svp-labs/reusable-spike@sha256:2e8fd569f9e68ca5475cf3964bdc98c59aae7a996a2b6706e926f0dde52472ca
