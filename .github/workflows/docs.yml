@@ -1,0 +1,33 @@
+# Style, relative links and heading anchors of the Markdown of this repository (make docs-check): markdownlint-cli2 and
+# lychee --offline from images pinned by digest in the Makefile, run without network. Job docs is the check the ruleset of
+# main requires.
+#
+# The repository is public and a pull request from a fork runs this workflow with the fork's code, so: no secret, no
+# id-token, no pull_request_target; the only job has contents: read; the one action is GitHub's own, pinned to a full
+# commit SHA; checkout never leaves the token in .git/config.
+name: docs
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # No paths filter: a required check whose workflow does not run is never reported and leaves the pull request waiting.
+
+permissions: {}
+
+concurrency:
+  group: docs-${{ github.ref }}
+  # A new push to a pull request makes its previous run useless; a run on main is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  docs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make docs-check

@@ -14,3 +14,11 @@ Quy ước chung (ngôn ngữ, tài liệu timeless, ADR, comment, Git, repo pub
 - **Ngôn ngữ viết:** file `.md` viết tiếng Việt.
 - **Repo public:** chỉ script, test và README; không `.env`, không output thật.
 - **Git:** mọi thay đổi vào `main` đi qua PR có check bắt buộc xanh.
+
+## Lệnh kiểm
+
+Mọi lệnh chạy từ gốc repo qua `Makefile`; `make help` liệt kê target.
+
+- `make docs-check`: markdownlint-cli2 và lychee `--offline` trên mọi `.md` (trừ phần chép của repo khác ở `drills/svp-backend/`,
+  `drills/svp-frontend/`), từ image ghim digest, không mạng, cần Docker. Thu hẹp: `make docs-check DOCS='<file hay glob>'`. CI chạy
+  cùng lệnh ở job `docs` của `.github/workflows/docs.yml`.
