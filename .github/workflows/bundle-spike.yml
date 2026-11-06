@@ -1,25 +1,9 @@
-# Spike: a release whose signature, vuln attestation and build provenance are all Sigstore bundles (OCI referrers),
-# signed keyless by this workflow, and what the daily rescan does to such a release. The results are in
-# bundle-spike/README.md.
-#
-#   build   builds bundle-spike/image FROM scratch for linux/amd64 and linux/arm64, pushes the two manifests and an
-#           index of them, twice: variant release and variant novuln (same content, another label, so another
-#           digest). Release: cosign sign, cosign attest --type vuln (bundle-spike/vuln-predicate.sh, scanFinishedOn
-#           now) and actions/attest, all three bundles. Novuln: cosign sign and actions/attest only, the control
-#           without a vuln attestation.
-#   rescan  attests a new vuln predicate (scanFinishedOn now) on the index DIGEST, with --replace as the daily rescan
-#           of svp-backend does: whether --replace replaces a bundle or adds one.
-#   prune   keeps the vuln bundle of DIGEST with the newest scanFinishedOn and removes the others (registry API, then
-#           the GitHub REST API on its package version): bundle-spike/referrers.sh prune.
-# Every mode ends by listing the bundle referrers of its digests (bundle-spike/referrers.sh list).
-#
-# Security rules of this file:
-#   - permissions: {} here; the one job asks only for what it needs: read the code, push and delete package versions,
-#     mint the OIDC token for the keyless certificates, write the provenance attestation.
-#   - Every action is pinned to a full commit SHA (the tag in the comment is for people).
-#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
-#   - The dispatch input digest reaches the shell through env only, and is checked against sha256:<64 hex>.
-#   - The image is pushed with the job's GITHUB_TOKEN; no other secret exists here (public repository).
+# Spike of bundle-spike/README.md: a release whose signature, vuln attestation and provenance are Sigstore bundles, and
+# what the daily rescan does to it. Run by hand only, in mode build, rescan or prune.
+# Public repository: permissions: {} here, the one job asks for what signing needs (push and delete package versions,
+# OIDC token, attestation); actions pinned to a full commit SHA; persist-credentials: false; the dispatch digest
+# reaches the shell through env only and is checked against sha256:<64 hex>; no secret beyond GITHUB_TOKEN.
+# Design notes: bundle-spike/README.md.
 name: bundle-spike
 
 on:

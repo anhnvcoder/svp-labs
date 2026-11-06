@@ -151,6 +151,20 @@ CID=https://github.com/anhnvcoder/svp-labs/.github/workflows/reusable-spike-call
 | `kyverno/policy-composite.yaml` | Phép 2, 3, 7, 8, 9 với identity của caller, dạng `sources.json` hôm nay |
 | `kyverno/pods/*.yaml` | Pod của hai image |
 
+Reusable workflow được caller gọi bằng đường đầy đủ ở một commit (`anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@<sha>`), như một repo
+khác sẽ gọi. Nó build cây của caller, ký và attest image keyless (cosign, định dạng Sigstore bundle) cùng build provenance (`actions/attest`), để
+chứng chỉ cho thấy reusable workflow ký bằng identity nào. Trước đó nó in cái nó biết về commit của chính mình (các context, claim của token OIDC, input
+`scripts-ref`), checkout repo của chính nó ở commit mà token nêu, rồi chạy script phát hành từ checkout đó: câu hỏi là reusable workflow có ghim được
+script nó chạy mà không lặp lại SHA không. Caller phát hành image của `image/` hai lần, một lần qua reusable workflow và một lần qua composite action,
+mỗi bên gọi bằng đường đầy đủ ở cùng một commit `fa3cf13d77877fa8fde4ca8fe1126e068a304253` (một repo ở đây nên cùng `owner/repo`, không bao giờ `./`), như
+`svp-frontend` sẽ gọi của backend. Commit đó có trước commit ghi nó vào caller (mục "Chạy"), nên log của lượt chạy phân biệt được commit
+của script với commit của lượt.
+
+Hai workflow public nên theo các luật: `permissions: {}` ở đầu file, mỗi job chỉ xin đúng thứ ký cần (đọc code, đẩy package, lấy token OIDC cho chứng chỉ
+keyless, ghi attestation), và reusable workflow không được hơn quyền job gọi nó cấp; mọi action và reusable workflow ghim SHA đầy đủ của commit, không
+truyền secret nào (repo public); `actions/checkout` không để token trong `.git/config`; token OIDC được xin một lần để in claim (chỉ payload, không bao giờ
+chính token); input vào script qua `env:`, không qua `${{ }}` trong `run:`. Caller chỉ chạy khi dispatch: nó ký, nên không gì chạy nó khi push hay PR.
+
 ## Chạy
 
 Caller ghim workflow và action ở một commit **trước** commit ghi nó (`uses:` không nhận biểu thức), nên cần hai commit: commit 1 có mọi file với

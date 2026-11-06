@@ -122,7 +122,15 @@ Workflow [`.github/workflows/bundle-spike.yml`](../.github/workflows/bundle-spik
   `release` (ký, `vuln`, provenance, cả ba là bundle) và `novuln` (ký, provenance; đối chứng thiếu `vuln`). Summary in hai digest và các
   referrer.
 - `rescan` với `digest` của `release`: attest thêm một `vuln` (`scanFinishedOn` lúc chạy) bằng `--replace`, như `rescan.sh` của `svp-backend`.
-- `prune` với `digest` của `release`: giữ bundle `vuln` mới nhất, gỡ mọi bundle `vuln` khác (`referrers.sh prune`).
+- `prune` với `digest` của `release`: giữ bundle `vuln` mới nhất, gỡ mọi bundle `vuln` khác (`referrers.sh prune`; gọi API của registry, rồi API REST của
+  GitHub trên package version của bundle).
+
+Mỗi chế độ kết thúc bằng việc liệt kê bundle referrer của các digest của nó (`referrers.sh list`). Biến thể `release` chạy `cosign sign`,
+`cosign attest --type vuln` (`vuln-predicate.sh`, `scanFinishedOn` lúc chạy) và `actions/attest`, ra đủ ba bundle; `novuln` chỉ chạy `cosign sign` và
+`actions/attest`, là đối chứng không có `vuln`. Workflow public nên theo các luật: `permissions: {}` ở đầu file, job duy nhất chỉ xin đúng thứ nó cần
+(đọc code, đẩy và xoá package version, lấy token OIDC cho chứng chỉ keyless, ghi attestation provenance); mọi action ghim SHA đầy đủ của commit;
+`actions/checkout` không để token trong `.git/config`; input `digest` của dispatch vào shell qua `env`, và được kiểm khớp `sha256:<64 hex>`; image
+đẩy bằng `GITHUB_TOKEN` của job, không có secret nào khác (repo public).
 
 Trên máy chỉ đọc ẩn danh (package `bundle-spike` public): khối biến ở mục "Lượt chạy", rồi lệnh ở từng dòng bảng, và
 

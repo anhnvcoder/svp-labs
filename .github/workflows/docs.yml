@@ -1,10 +1,6 @@
-# Style, relative links and heading anchors of the Markdown of this repository (make docs-check): markdownlint-cli2 and
-# lychee --offline from images pinned by digest in the Makefile, run without network. Job docs is the check the ruleset of
-# main requires.
-#
-# The repository is public and a pull request from a fork runs this workflow with the fork's code, so: no secret, no
-# id-token, no pull_request_target; the only job has contents: read; the one action is GitHub's own, pinned to a full
-# commit SHA; checkout never leaves the token in .git/config.
+# Markdown style and links of this repository (make docs-check); job docs is the check the ruleset of main requires.
+# Public repository, a fork's pull request runs this file: no secret, no id-token, no pull_request_target;
+# contents: read; the one action is GitHub's own, pinned to a full commit SHA; checkout with persist-credentials: false.
 name: docs
 
 on:

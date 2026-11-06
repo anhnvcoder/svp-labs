@@ -1,18 +1,9 @@
-# Spike, the reusable workflow: called by reusable-spike-caller.yml with its full path at a commit
-# (anhnvcoder/svp-labs/.github/workflows/reusable-spike-called.yml@<sha>), as another repository would call it. It
-# builds the caller's tree, signs and attests the image keyless (cosign, Sigstore bundle format) and attests its build
-# provenance (actions/attest), so the certificate shows which identity a reusable workflow signs with. Before that it
-# prints what it can learn about its own commit (contexts, the claims of its OIDC token, the scripts-ref input) and
-# checks out its own repository at the commit the token names, then runs the release script from that checkout: the
-# question is whether a reusable workflow can pin the scripts it runs without repeating the sha. Findings in
-# reusable-spike/README.md.
-#
-# Security rules of this file:
-#   - permissions: {} here; the one job asks only for what it needs, and gets no more than the calling job grants.
-#   - Every action is pinned to a full commit SHA (the tag in the comment is for people).
-#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
-#   - The OIDC token is requested once to print its claims (the payload only, never the token itself).
-#   - Inputs reach scripts through env:, never ${{ }} inside run:.
+# Spike of reusable-spike/README.md, the reusable workflow that reusable-spike-caller.yml calls: builds the caller's
+# tree, signs and attests the image keyless, and runs its release script from its own repository at the token's commit.
+# Public repository: permissions: {} here, the job asks for what signing needs and gets no more than the caller grants;
+# actions pinned to a full commit SHA; persist-credentials: false; the OIDC token is never printed (only its claims);
+# inputs reach scripts through env:, never ${{ }} in run:.
+# Design notes: reusable-spike/README.md.
 name: reusable-spike-called
 
 on:

@@ -100,6 +100,11 @@ cho cả lượt) mà chọn định dạng cùng cách; mọi ca trên cho cùn
 | `pods/*.yaml` | Pod của từng ca: `new`, `old`, `none`, `both` |
 | `mixed.sh` | `legacy`, `mixed`, `moved` (bản sao bản phát hành `gateway`), `keybundle` (bản sao image spike) trên registry tạm (`registry:3` ghim digest, chỉ container công cụ vào được qua network namespace của nó, không publish cổng); khoá tạm sinh mỗi lượt, không Rekor; xoá registry và thư mục tạm khi xong. `KYVERNO=<image>` đổi CLI |
 | `image/` | Image `FROM scratch` mà workflow build |
+| `../.github/workflows/attest-spike.yml` | Workflow chạy khi push vào `attest-spike/` và chạy tay: build image nhỏ đó, đẩy lên GHCR và attest build provenance bằng `actions/attest`, ghi một Sigstore bundle vào registry cạnh image; kết quả là đầu vào của câu hỏi ở đầu README: Kyverno đang ghim có xác minh được bundle đó không |
+
+Workflow public nên theo các luật: `permissions: {}` ở đầu file, job duy nhất chỉ xin đúng thứ nó cần (đọc code, đẩy package, lấy token OIDC cho chứng chỉ
+keyless, ghi attestation); mọi action ghim SHA đầy đủ của commit (tag ở comment cho người đọc) dù repo cho phép action bất kỳ; `actions/checkout` không để
+token trong `.git/config` vì không gì đẩy vào repo này; image đẩy bằng `GITHUB_TOKEN` của job, không có secret nào khác (repo public).
 
 ## Giới hạn gặp
 
