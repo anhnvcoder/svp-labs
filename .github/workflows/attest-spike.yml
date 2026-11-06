@@ -1,14 +1,8 @@
-# Spike: builds one tiny image (attest-spike/image, FROM scratch), pushes it to GHCR and attests its build provenance with
-# actions/attest, which writes a Sigstore bundle and pushes it to the registry next to the image. The result is the input
-# of the spike in attest-spike/README.md: can the pinned Kyverno ImageValidatingPolicy verify that bundle?
-#
-# Security rules of this file:
-#   - permissions: {} here; the one job asks only for what it needs: read the code, push the package, mint the OIDC
-#     token for the keyless certificate, write the attestation.
-#   - Every action is pinned to a full commit SHA (the tag in the comment is for people), even though this repository
-#     allows any action.
-#   - actions/checkout does not keep the token in .git/config: nothing pushes to this repository.
-#   - The image is pushed with the job's GITHUB_TOKEN; no other secret exists here (public repository).
+# Spike of attest-spike/README.md: builds one tiny image, pushes it to GHCR and attests its build provenance. Runs
+# on a push to attest-spike/ and by hand.
+# Public repository: permissions: {} here, the one job asks only for what it needs (push the package, OIDC token,
+# attestation); actions pinned to a full commit SHA; persist-credentials: false; no secret beyond GITHUB_TOKEN.
+# Design notes: attest-spike/README.md.
 name: attest-spike
 
 on:
