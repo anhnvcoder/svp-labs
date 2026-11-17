@@ -1,0 +1,21 @@
+#!/bin/bash
+# Boot script of a bastion of the multi-region-dr lab: PostgreSQL client, dig, the RDS certificate bundle and the
+# heartbeat script. Holds no secret: the script reads the password from Secrets Manager of its own Region at run time.
+set -euo pipefail
+
+dnf install -y postgresql17 bind-utils
+install -d -m 0755 /opt/svp-lab-dr /var/lib/svp-lab-dr
+curl -fsS --retry 5 -o /opt/svp-lab-dr/rds-ca.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+
+cat >/etc/svp-lab-dr.conf <<'EOF'
+SVP_DR_REGION=${region}
+SVP_DR_SECRET_ID=${secret_id}
+SVP_DR_NAME=${dns_name}
+SVP_DR_DB=${db_name}
+SVP_DR_USER=${db_user}
+SVP_DR_CA=/opt/svp-lab-dr/rds-ca.pem
+SVP_DR_RUN=/var/lib/svp-lab-dr
+EOF
+
+echo '${heartbeat}' | base64 -d >/opt/svp-lab-dr/heartbeat.sh
+chmod 0755 /opt/svp-lab-dr/heartbeat.sh
