@@ -1,0 +1,28 @@
+# Terraform working directories: providers, tflint plugins (make writes them per directory).
+.terraform/
+# A module's lock file is not committed: the root that calls it pins the providers. A root's lock file is.
+**/modules/**/.terraform.lock.hcl
+# The throwaway module of make test-guard, removed on exit.
+.test-guard/
+
+# State and plans: they hold resource ids, account ids and secrets in clear.
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Per-account values (account ids, IP ranges, domain names) and backends: the repository is public. Each value file
+# has a committed <name>.auto.tfvars.example beside it.
+*.auto.tfvars
+*.auto.tfvars.json
+terraform.tfvars
+terraform.tfvars.json
+backend*.hcl
+
+# Output of make lambda-build.
+serverless-variant/build/
+
+.env*
+.DS_Store

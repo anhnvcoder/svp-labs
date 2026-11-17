@@ -1,0 +1,62 @@
+# Terraform, Go and shell checks of the labs (make targets, same commands as on a dev machine); not a required check.
+# Public repository, a fork's pull request runs this file: no secret, no id-token, no pull_request_target;
+# contents: read; actions pinned to a full commit SHA; checkout with persist-credentials: false. The job's own token
+# goes to make tflint alone, against the anonymous rate limit of the ruleset download.
+name: labs
+
+on:
+  pull_request:
+    paths: &paths
+      - "**/*.tf"
+      - "**/*.tftest.hcl"
+      - "**/*.tftpl"
+      - "**/.terraform.lock.hcl"
+      - "**/*.go"
+      - "**/go.mod"
+      - "**/go.sum"
+      - "**/scripts/*.sh"
+      - Makefile
+      - .tflint.hcl
+      - .github/workflows/labs.yml
+  push:
+    branches: [main]
+    paths: *paths
+
+permissions: {}
+
+concurrency:
+  group: labs-${{ github.ref }}
+  # A new push to a pull request makes its previous run useless; a run on main is never cancelled.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  terraform:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make test-guard fmt-check validate
+      - run: make tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - run: make trivy test shellcheck script-test
+
+  go:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Same Go as the code repository. No cache: nothing shared between runs that a pull request could write into.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.27.4
+          cache: false
+      - run: make go-test lambda-build
