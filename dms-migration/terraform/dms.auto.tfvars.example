@@ -1,0 +1,4 @@
+# Copy to dms.auto.tfvars (not committed) when the account already has one of the roles DMS requires (step 2 of the
+# session in README.md); keep the line of each role it has. The lab then neither creates nor deletes that role.
+create_dms_vpc_role  = false
+create_dms_logs_role = false
