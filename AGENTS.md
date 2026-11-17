@@ -34,6 +34,11 @@ Mọi lệnh chạy từ gốc repo qua `Makefile`; `make help` liệt kê targe
   `DIRS='<thư mục> …'`, mỗi mục là mọi thư mục `*.tf` bên dưới nó. `make fmt` ghi lại định dạng. trivy: HIGH, CRITICAL làm đỏ; ngoại lệ
   chỉ bằng `#trivy:ignore:<id>` ngay trên resource, lý do ở comment.
 - `make lock DIRS=<thư mục>`: ghi `.terraform.lock.hcl` của mọi root bên dưới cho các nền tảng ở `LOCK_PLATFORMS` của `Makefile`.
+- Provider Terraform và ruleset tflint nằm ở `.plugin-cache/` (gitignore), mỗi version tải một lần, dùng chung cho mọi thư mục
+  (provider AWS giải nén ra hàng trăm MB). `init` dùng bản đã có, kể cả khi module chưa có lock file, chỉ thêm version còn thiếu, lần
+  lượt (khoá `.plugin-cache/lock`), nên các lần chạy khác `DIRS` vẫn song song được. Cache giữ mọi version từng tải: xoá
+  `.plugin-cache/` cùng lock file của module (`**/modules/**/.terraform.lock.hcl`, gitignore) khi không có `make` nào chạy, để lấy lại
+  đĩa hay sửa một bản giải nén dở.
 - `make test-guard`: tự thử luật của `make test` với `docker` giả, trên module tạm ở `.test-guard/` (xoá khi xong).
 - `make go-test`: `gofmt -l`, `go vet`, `go test -race` trên mỗi `go.mod` (ngoài `drills/`), Go của máy. Thu hẹp: `DIRS=…`.
 - `make lambda-build`: build mỗi `serverless-variant/functions/cmd/<tên>/` thành `serverless-variant/build/<tên>/bootstrap`
@@ -48,7 +53,8 @@ Các target Terraform và shellcheck chạy từ image ghim digest, cần Docker
 
 - **AI không chạy lệnh nào chạm account AWS, kể cả chỉ đọc:** `aws` (trừ `--version`), `terraform init` có backend, `plan`, `apply`,
   `destroy`, `import`, `state`, `output`, `refresh`, script hay chương trình dùng SDK AWS, script buổi của bài.
-- **`terraform test` chỉ qua `make test`:** container ghim digest, `--network none`, không biến `AWS_*`, chỉ mount thư mục module, mỗi
-  file test có đúng một `mock_provider "aws"` và mọi `run` là `command = plan`. AI không chạy `terraform test` trần.
+- **`terraform test` chỉ qua `make test`:** container ghim digest, `--network none`, không biến `AWS_*`, chỉ mount thư mục module và cache
+  provider (cả hai read-only; provider trong thư mục dữ liệu là symlink vào cache), mỗi file test có đúng một `mock_provider "aws"` và mọi
+  `run` là `command = plan`. AI không chạy `terraform test` trần.
 - **Lệnh buổi do người học chạy:** README của bài viết sẵn từng bước, mỗi lệnh ghi profile và `--region`, nói rõ output cần dán lại.
   Buổi kết thúc bằng `terraform destroy` và lệnh quét tài nguyên sót.
