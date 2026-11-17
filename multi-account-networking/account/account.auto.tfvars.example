@@ -1,0 +1,5 @@
+# Copy to account.auto.tfvars, which git ignores, and put the real address there: the repository is public.
+# The management account id comes from TF_VAR_management_account_id in each command, not from this file.
+
+# Email of the root user of svp-network; AWS refuses an address that any account already has.
+network_account_email = "network@svp.example"

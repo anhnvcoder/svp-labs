@@ -1,0 +1,166 @@
+#!/bin/bash
+# Boot script of the VPN router of the simulated site: two IPsec tunnels to the AWS VPN, routes to the lab through
+# them, and the site's DNS server. It holds no secret: the pre-shared keys are read from Secrets Manager with the
+# instance role. Runs on: instance (once, by cloud-init). Design notes: multi-account-networking/README.md.
+set -euo pipefail
+
+dnf -y install libreswan bind
+
+# Loose reverse-path filtering: AWS may answer on the tunnel the router does not send on.
+cat > /etc/sysctl.d/90-svp-lab-net.conf <<'EOF'
+net.ipv4.ip_forward = 1
+net.ipv4.conf.all.rp_filter = 2
+EOF
+sysctl --system >/dev/null
+
+secret=$(aws secretsmanager get-secret-value --secret-id '${preshared_key_arn}' --region '${region}' \
+  --query SecretString --output text)
+
+# The service does not document the layout of its secret: take the string under the tunnel's outside address or
+# number, or the key-like field of the object holding that address. Otherwise print only the layout, no value.
+key_for() {
+  SECRET="$secret" python3 - "$1" "$2" <<'PY'
+import json, os, re, sys
+
+ip, n = sys.argv[1], sys.argv[2]
+try:
+    doc = json.loads(os.environ["SECRET"])
+except ValueError:
+    sys.exit("the secret is not JSON")
+
+
+def norm(k):
+    return re.sub(r"[^a-z0-9]", "", str(k).lower())
+
+
+def key_of(v):
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        for k, x in v.items():
+            if isinstance(x, str) and ("presharedkey" in norm(k) or norm(k) == "psk"):
+                return x
+    return None
+
+
+def walk(v):
+    if isinstance(v, dict):
+        for k, x in v.items():
+            if (k == ip or norm(k) == "tunnel" + n) and key_of(x):
+                return key_of(x)
+        if ip in v.values() and key_of(v):
+            return key_of(v)
+        v = list(v.values())
+    if isinstance(v, list):
+        for x in v:
+            found = walk(x)
+            if found:
+                return found
+    return None
+
+
+def shape(v):
+    if isinstance(v, dict):
+        return {k: shape(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [shape(x) for x in v]
+    return type(v).__name__
+
+
+found = walk(doc)
+if not found:
+    sys.exit("no key for tunnel %s; layout of the secret: %s" % (n, json.dumps(shape(doc))))
+print(found)
+PY
+}
+
+%{ for i, t in tunnels ~}
+key${i + 1}=$(key_for '${t.outside_ip}' ${i + 1})
+%{ endfor ~}
+unset secret
+
+umask 077
+{
+%{ for i, t in tunnels ~}
+  printf '%s %s : PSK "%s"\n' '${public_ip}' '${t.outside_ip}' "$key${i + 1}"
+%{ endfor ~}
+} > /etc/ipsec.d/svp-lab-net.secrets
+unset%{ for i, t in tunnels } key${i + 1}%{ endfor }
+umask 022
+
+# Route-based tunnels: each VTI carries the SAs whose mark equals its key. The router sends on tunnel 1 (lower
+# metric) and keeps tunnel 2 as standby; src keeps the router's own packets inside the tunnels' traffic selectors.
+%{ for i, t in tunnels ~}
+ip link add vti${i + 1} type vti local ${router_ip} remote ${t.outside_ip} key ${100 + i}
+ip addr add ${t.cgw_inside_ip}/30 dev vti${i + 1}
+ip link set vti${i + 1} up
+sysctl -qw net.ipv4.conf.vti${i + 1}.disable_policy=1 net.ipv4.conf.vti${i + 1}.rp_filter=2
+ip route add ${lab_cidr} dev vti${i + 1} src ${router_ip} metric ${100 * (i + 1)}
+%{ endfor ~}
+
+# IKEv2 with the algorithms the VPN tunnels are pinned to; the router starts both tunnels.
+cat > /etc/ipsec.d/svp-lab-net.conf <<'EOF'
+%{ for i, t in tunnels ~}
+conn tunnel${i + 1}
+    authby=secret
+    auto=start
+    ikev2=yes
+    left=%defaultroute
+    leftid=${public_ip}
+    leftsubnet=${onprem_cidr}
+    right=${t.outside_ip}
+    rightsubnet=${lab_cidr}
+    ike=aes256-sha2_256-modp2048
+    esp=aes256-sha2_256
+    ikelifetime=8h
+    salifetime=1h
+    mark=${100 + i}/0xffffffff
+    vti-interface=vti${i + 1}
+    vti-routing=no
+
+%{ endfor ~}
+EOF
+
+cat > /etc/named.conf <<'EOF'
+options {
+    directory "/var/named";
+    listen-on port 53 { 127.0.0.1; ${router_ip}; };
+    listen-on-v6 { none; };
+    // Answers the site and the lab, recurses for the site only: no open resolver.
+    allow-query { 127.0.0.1; ${onprem_cidr}; ${lab_cidr}; };
+    allow-recursion { 127.0.0.1; ${onprem_cidr}; };
+    allow-transfer { none; };
+    forwarders { ${vpc_dns}; };
+    forward only;
+    // example. is absent from the signed root zone, so validation would reject every answer for svp.example.
+    dnssec-validation no;
+    query-source address ${router_ip};
+};
+
+zone "${zone_name}" {
+    type primary;
+    file "${zone_name}.zone";
+};
+%{ for z in forward_zones ~}
+
+zone "${z}" {
+    type forward;
+    forward only;
+    forwarders {%{ for ip in inbound_ips } ${ip};%{ endfor } };
+};
+%{ endfor ~}
+EOF
+
+cat > /var/named/${zone_name}.zone <<'EOF'
+$TTL 60
+@       IN SOA router.${zone_name}. hostmaster.${zone_name}. (1 3600 600 86400 60)
+@       IN NS  router.${zone_name}.
+router  IN A   ${router_ip}
+host    IN A   ${host_ip}
+EOF
+chown root:named /var/named/${zone_name}.zone
+chmod 640 /var/named/${zone_name}.zone
+
+named-checkconf -z
+systemctl enable --now named
+systemctl enable --now ipsec
