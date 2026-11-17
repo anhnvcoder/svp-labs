@@ -1,5 +1,7 @@
-# Terraform working directories: providers, tflint plugins (make writes them per directory).
+# Terraform working directories of an init run by hand (make keeps its own in a temporary directory).
 .terraform/
+# Plugins shared by every Terraform directory (make writes them): Terraform's provider cache, tflint's rulesets.
+.plugin-cache/
 # A module's lock file is not committed: the root that calls it pins the providers. A root's lock file is.
 **/modules/**/.terraform.lock.hcl
 # The throwaway module of make test-guard, removed on exit.

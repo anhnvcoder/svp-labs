@@ -6,8 +6,9 @@
 # runs on the host. Docker runs with DOCKER_DEFAULT_PLATFORM unset: the dev machine's shell sets it to linux/amd64 for
 # another project, which would run these images under emulation.
 
-# Parallel runs: a Terraform target with DIRS=<dir> writes only below <dir> (.terraform/tflint.d and the lock file of a
-# module), and test-guard writes into a directory of its own, so runs on different directories never share a file.
+# Parallel runs: a Terraform target with DIRS=<dir> writes below <dir> only the lock file of a module, test-guard writes
+# into a directory of its own, and the plugin cache that every run shares only gains the versions it lacks, one writer
+# at a time (CACHE_LOCK), so runs on different directories can go side by side.
 
 # Same pins as the Makefile of svp-infra, whose recipes these Terraform targets copy.
 # renovate: datasource=docker depName=hashicorp/terraform
@@ -36,9 +37,28 @@ TF = $(TF_RUN) $(TERRAFORM_IMAGE)
 # init, validate and providers lock keep their working data in a temporary directory of the host, $$data, through
 # TF_DATA_DIR: the .terraform/terraform.tfstate of a root the learner initialised would otherwise make
 # `init -backend=false` read its backend.
-TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TERRAFORM_IMAGE)
+TF_DATA = $(TF_RUN) -e TF_DATA_DIR=/tfdata -v "$$data:/tfdata" $(TF_CACHE) $(TERRAFORM_IMAGE)
 # Starts each loop turn with an empty $$data; the trap removes the last one however the recipe ends.
 NEW_DATA = rm -rf "$$data"; data=$$(mktemp -d) || exit 1
+
+# One copy of each plugin version for every directory, gitignored and kept until removed (rm -rf .plugin-cache, plus the
+# module lock files **/modules/**/.terraform.lock.hcl that recorded its hashes); the AWS provider unpacks to hundreds of
+# MB. init links $$data/providers to /plugin-cache, so every container that runs Terraform after it mounts the cache.
+PLUGIN_CACHE := .plugin-cache
+# With no lock file entry (a module's lock file is not committed), init would download again and unpack over the cached
+# copy another run may be executing; MAY_BREAK links that copy instead. The hashes of a root's lock file are still
+# checked, and make lock still writes them for every LOCK_PLATFORMS.
+TF_CACHE = -e TF_PLUGIN_CACHE_DIR=/plugin-cache -e TF_PLUGIN_CACHE_MAY_BREAK_DEPENDENCY_LOCK_FILE=1 \
+	-v "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache"
+# Neither Terraform nor tflint guards its cache against a second writer: an init waits for the lock directory (mkdir
+# is atomic and needs no flock, which macOS lacks). The recipe's EXIT trap runs CACHE_UNLOCKED when the init fails.
+CACHE_LOCK = mkdir -p "$(PLUGIN_CACHE)/terraform" "$(PLUGIN_CACHE)/tflint" || exit 1; n=0; \
+	until mkdir "$(PLUGIN_CACHE)/lock" 2>/dev/null; do \
+	  n=$$((n + 1)); [ $$n -lt 600 ] || { echo "FAIL: $(PLUGIN_CACHE)/lock held for 10 minutes; remove it if no make runs" >&2; exit 1; }; \
+	  sleep 1; \
+	done; locked=1
+CACHE_UNLOCK = rmdir "$(PLUGIN_CACHE)/lock"; locked=
+CACHE_UNLOCKED = [ -z "$$locked" ] || rmdir "$(PLUGIN_CACHE)/lock"
 
 # Sets the positional parameters to the DIRS entries (default: .), or stops at the first one outside this repository
 # or that is not a directory.
@@ -103,7 +123,7 @@ fmt: ## terraform fmt, rewriting the files of the checked directories
 
 validate: ## terraform init -backend=false, then terraform validate, in each checked directory
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "validate: no Terraform directory"; exit 0; }; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  echo "validate $$d"; \
 	  $(NEW_DATA); \
@@ -112,19 +132,24 @@ validate: ## terraform init -backend=false, then terraform validate, in each che
 	    [ -f "$$d/.terraform.lock.hcl" ] || { echo "FAIL: $$d is a root without .terraform.lock.hcl (run make lock DIRS=$$d)" >&2; exit 1; }; \
 	    lock=-lockfile=readonly; \
 	  fi; \
+	  $(CACHE_LOCK); \
 	  $(TF_DATA) init -backend=false -input=false -no-color $$lock >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  $(TF_DATA) validate -no-color || { echo "FAIL: terraform validate $$d" >&2; exit 1; }; \
 	done
 
-# The AWS ruleset is downloaded from GitHub into <dir>/.terraform/tflint.d/; CI passes its token in GITHUB_TOKEN against
+# The AWS ruleset is downloaded from GitHub into the plugin cache; CI passes its token in GITHUB_TOKEN against
 # the anonymous rate limit, and only this container gets it. Local modules are inspected where they are called.
 tflint: ## tflint --init, then tflint, in each checked directory (.tflint.hcl)
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "tflint: no Terraform directory"; exit 0; }; \
+	locked=; trap '$(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  echo "tflint $$d"; \
-	  set -- $(DOCKER) -e GITHUB_TOKEN -e "TFLINT_PLUGIN_DIR=/src/$$d/.terraform/tflint.d" -v "$(CURDIR):/src" -w "/src/$$d" \
+	  set -- $(DOCKER) -e GITHUB_TOKEN -e "TFLINT_PLUGIN_DIR=/src/$(PLUGIN_CACHE)/tflint" -v "$(CURDIR):/src" -w "/src/$$d" \
 	    $(TFLINT_IMAGE) --config=/src/.tflint.hcl; \
+	  $(CACHE_LOCK); \
 	  "$$@" --init >/dev/null || { echo "FAIL: tflint --init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  "$$@" --format=compact || { echo "FAIL: tflint $$d" >&2; exit 1; }; \
 	done
 
@@ -146,8 +171,8 @@ trivy: ## trivy config on each checked directory (HIGH and CRITICAL fail; no net
 # fixed layout.
 
 # No credential: env(1) drops every AWS_* variable of the caller before docker starts, no -e passes one, HOME is /tmp
-# of the container, and only the module directory is mounted (read-only for the test), never ~/.aws or the repository
-# root. A module directory holding .envrc or backend.hcl is refused.
+# of the container, and only the module directory and the provider cache are mounted (both read-only for the test),
+# never ~/.aws or the repository root. A module directory holding .envrc or backend.hcl is refused.
 
 # TEST_GUARD refuses anything outside the layout, naming the file and the line, rather than looking for known ways to
 # break the rule (a run without command applies; a mock under an alias leaves the real provider as the default).
@@ -186,18 +211,21 @@ TEST_GUARD = \
 
 test: ## terraform test of each checked module: mock AWS provider, plan only, no network, no credential
 	@dirs=$$($(LIST_DIRS)) || exit 1; [ -n "$$dirs" ] || { echo "test: no Terraform directory"; exit 0; }; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  $(IS_MODULE) || continue; \
 	  echo "test $$d"; \
 	  $(TEST_GUARD); \
 	  $(NEW_DATA); \
-	  $(TEST_RUN) -v "$(CURDIR)/$$d:/src" -w /src $(TERRAFORM_IMAGE) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
-	  $(TEST_RUN) --network none -v "$(CURDIR)/$$d:/src:ro" -w /src $(TERRAFORM_IMAGE) test -no-color || { echo "FAIL: terraform test $$d" >&2; exit 1; }; \
+	  $(CACHE_LOCK); \
+	  $(TEST_RUN) $(TF_CACHE) -v "$(CURDIR)/$$d:/src" -w /src $(TERRAFORM_IMAGE) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
+	  $(TEST_RUN) --network none -v "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache:ro" -v "$(CURDIR)/$$d:/src:ro" -w /src $(TERRAFORM_IMAGE) test -no-color || { echo "FAIL: terraform test $$d" >&2; exit 1; }; \
 	done
 
 # The guard cases run on modules in a temporary directory; the run of make test with a fake docker needs a module of
 # this repository (DIRS stays inside it), so it gets one of its own under .test-guard/modules/, removed on exit.
+# Its /tfdata mount must be gone once it ends: the recipe removes only the temporary data directory it made.
 test-guard: ## Self-test of the rules of make test, with a fake docker (no container, network or credential)
 	@echo "test-guard"; \
 	mod=; tmp=$$(mktemp -d) || exit 1; \
@@ -258,18 +286,27 @@ test-guard: ## Self-test of the rules of make test, with a fake docker (no conta
 	! grep -E -q 'AWS_|/\.aws|\.envrc|backend\.hcl' "$$tmp/log" || fail "an AWS credential or env file reaches the container: $$(cat "$$tmp/log")"; \
 	line=$$(grep ' test -no-color$$' "$$tmp/log") || fail "no terraform test run: $$(cat "$$tmp/log")"; \
 	case "$$line" in (*" --network none "*) ;; (*) fail "terraform test runs with network: $$line";; esac; \
-	case "$$line" in (*" -v $(CURDIR)/$$mod:/src:ro "*) ;; (*) fail "terraform test mounts more than the module, read-only: $$line";; esac; \
+	mounts=$$(echo "$$line" | awk '{ for (i = 1; i <= NF; i++) \
+	  if ($$i == "-v") print $$(++i); else if ($$i ~ /^(-v.|--volume|--mount)/) print $$i }'); \
+	data=$$(echo "$$mounts" | sed -n 's|^\(/[^:]*\):/tfdata$$|\1|p'); \
+	[ -n "$$data" ] && [ ! -e "$$data" ] && case "$$data" in (*/..*) false;; esac \
+	  || fail "terraform test mounts at /tfdata what make test does not remove: $$line"; \
+	mounts=$$(echo "$$mounts" | sed 's|^/[^:]*:/tfdata$$|DATA|' | sort | tr '\n' ' '); \
+	want=$$(printf '%s\n' DATA "$(CURDIR)/$(PLUGIN_CACHE)/terraform:/plugin-cache:ro" "$(CURDIR)/$$mod:/src:ro" | sort | tr '\n' ' '); \
+	[ "$$mounts" = "$$want" ] || fail "terraform test mounts more than its data directory, the module and the provider cache (read-only): $$line"; \
 	case "$$line" in (*" $(TERRAFORM_IMAGE) "*) ;; (*) fail "terraform test does not run TERRAFORM_IMAGE: $$line";; esac; \
 	case "$(TERRAFORM_IMAGE)" in (*@sha256:*) ;; (*) fail "TERRAFORM_IMAGE is not pinned by digest";; esac
 
 lock: ## Write the lock file of each root below DIRS (default: every root) with hashes for LOCK_PLATFORMS
 	@dirs=$$($(LIST_DIRS)) || exit 1; \
-	data=; trap 'rm -rf "$$data"' EXIT; \
+	data=; locked=; trap 'rm -rf "$$data"; $(CACHE_UNLOCKED)' EXIT; \
 	for d in $$dirs; do \
 	  if $(IS_MODULE); then echo "lock: $$d is a module, its lock file is not committed; skipped"; continue; fi; \
 	  echo "lock $$d"; \
 	  $(NEW_DATA); \
+	  $(CACHE_LOCK); \
 	  $(TF_DATA) init -backend=false -input=false -no-color >/dev/null || { echo "FAIL: terraform init $$d" >&2; exit 1; }; \
+	  $(CACHE_UNLOCK); \
 	  $(TF_DATA) providers lock -no-color $(addprefix -platform=,$(LOCK_PLATFORMS)) || { echo "FAIL: providers lock $$d" >&2; exit 1; }; \
 	done
 
