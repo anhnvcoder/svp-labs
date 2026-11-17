@@ -1,0 +1,57 @@
+#!/bin/bash
+# Boot script of the on-premises stand-in of the dms-migration lab: PostgreSQL 17 of the distribution, set up for
+# logical replication and TLS, the lab script, and the DMS user. Holds no secret: the lab script reads the password
+# from the SSM parameter at run time.
+set -euo pipefail
+
+dnf install -y postgresql17-server postgresql17-contrib postgresql17 jq openssl
+postgresql-setup --initdb
+data=/var/lib/pgsql/data
+
+# Self-signed: DMS connects with sslmode=require, which encrypts without checking the issuer, as for a server whose CA
+# DMS does not hold.
+openssl req -new -x509 -days 30 -nodes -subj "/CN=svp-lab-dms-source" -keyout "$data/server.key" -out "$data/server.crt"
+chown postgres:postgres "$data/server.key" "$data/server.crt"
+chmod 0600 "$data/server.key"
+
+# Logical decoding for DMS (test_decoding comes with the contrib package). wal_sender_timeout 0 is the value the DMS
+# guide accepts; max_slot_wal_keep_size caps the WAL a forgotten slot can hold, and DMS then fails the task instead of
+# the disk filling up.
+cat >>"$data/postgresql.conf" <<'EOF'
+listen_addresses = '*'
+ssl = on
+password_encryption = scram-sha-256
+wal_level = logical
+max_replication_slots = 4
+max_wal_senders = 4
+wal_sender_timeout = 0
+max_slot_wal_keep_size = 2GB
+EOF
+
+# The DMS user, over TLS, from the DMS subnets only; the lab script connects through the local socket as postgres.
+cat >>"$data/pg_hba.conf" <<'EOF'
+%{ for cidr in dms_cidrs ~}
+hostssl ${db_name} ${dms_user} ${cidr} scram-sha-256
+hostssl replication ${dms_user} ${cidr} scram-sha-256
+%{ endfor ~}
+EOF
+
+systemctl enable --now postgresql
+
+install -d -m 0755 /opt/svp-lab-dms /var/lib/svp-lab-dms
+curl -fsS --retry 5 -o /opt/svp-lab-dms/rds-ca.pem \
+  https://truststore.pki.rds.amazonaws.com/ap-southeast-1/ap-southeast-1-bundle.pem
+
+cat >/etc/svp-lab-dms.conf <<'EOF'
+SVP_DMS_REGION=ap-southeast-1
+SVP_DMS_DB=${db_name}
+SVP_DMS_USER=${dms_user}
+SVP_DMS_PARAMETER=${parameter}
+SVP_DMS_TARGET_SECRET=${target_secret}
+SVP_DMS_CA=/opt/svp-lab-dms/rds-ca.pem
+SVP_DMS_RUN=/var/lib/svp-lab-dms
+EOF
+
+echo '${pgload}' | base64 -d | gunzip >/opt/svp-lab-dms/pgload.sh
+chmod 0755 /opt/svp-lab-dms/pgload.sh
+/opt/svp-lab-dms/pgload.sh init
