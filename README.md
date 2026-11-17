@@ -18,15 +18,20 @@ git clone https://github.com/anhnvcoder/svp-labs.git
 cd svp-labs
 ```
 
-Mỗi bài tự nêu công cụ nó cần ở README của bài. Lệnh kiểm tài liệu cần Docker và `make`.
+Lệnh kiểm cần Docker và `make`; bài có Go cần thêm Go đúng dòng `go` trong `go.mod` của bài. Công cụ khác (AWS CLI cho buổi chạy) nêu ở
+README của bài.
 
 ## Sử dụng
 
-README của mỗi bài nói cách chạy lại. Kiểm tài liệu của repo:
+README của mỗi bài nói cách chạy lại. Kiểm tĩnh repo, không chạm cloud:
 
 ```sh
-make docs-check   # markdownlint-cli2 và lychee --offline trên mọi .md
-make help         # liệt kê target
+make check                    # mọi lệnh kiểm dưới đây
+make docs-check               # markdownlint-cli2 và lychee --offline trên mọi .md
+make tf-check DIRS=<bài>      # fmt, validate, tflint, trivy, terraform test với provider giả
+make go-test                  # gofmt, go vet, go test -race
+make shellcheck DIRS=<bài>    # shellcheck trên scripts/*.sh
+make help                     # liệt kê target
 ```
 
 ## Các bài lab
