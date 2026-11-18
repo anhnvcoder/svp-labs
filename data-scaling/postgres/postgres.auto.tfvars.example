@@ -1,0 +1,5 @@
+# Copy to postgres.auto.tfvars (not committed) to choose the parts of a session. A sitting turns all three on; setting
+# one false and applying again removes that part alone.
+aurora = true
+rds    = true
+proxy  = true

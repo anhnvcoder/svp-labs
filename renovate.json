@@ -26,6 +26,7 @@
     "multi-account-networking/**",
     "serverless-variant/**",
     "multi-region-dr/**",
+    "data-scaling/**",
     "dms-migration/**"
   ],
   "customManagers": [
