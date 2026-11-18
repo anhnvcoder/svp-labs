@@ -1,0 +1,3 @@
+# Copy to valkey.auto.tfvars (not committed). After kv-session.sh reshard, set shards to the count it printed: the
+# next plan then shows no change, and the state matches the group before the destroy.
+shards = 2

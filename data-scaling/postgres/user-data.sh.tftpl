@@ -1,0 +1,27 @@
+#!/bin/bash
+# Boot script of the loader of the postgres part of the data-scaling lab: PostgreSQL 17 client and pgbench (in the
+# contrib package), jq, dig, the CA files of RDS and of RDS Proxy, and pg.sh. Holds no secret and no endpoint: pg.sh
+# reads the password from Secrets Manager and takes each endpoint as an argument at run time.
+set -euo pipefail
+
+dnf install -y postgresql17 postgresql17-contrib jq bind-utils
+install -d -m 0755 /opt/svp-lab-ds /var/lib/svp-lab-ds
+curl -fsS --retry 5 -o /opt/svp-lab-ds/rds-ca.pem https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem
+# RDS Proxy presents an ACM certificate: its guide names the root CAs of Amazon Trust Services, in one file. The echo
+# keeps a file without a final newline from running into the next.
+for ca in AmazonRootCA1 AmazonRootCA2 AmazonRootCA3 AmazonRootCA4 SFSRootCAG2; do
+  curl -fsS --retry 5 "https://www.amazontrust.com/repository/$ca.pem"
+  echo
+done >/opt/svp-lab-ds/proxy-ca.pem
+
+cat >/etc/svp-lab-ds-pg.conf <<'EOF'
+SVP_DS_REGION=${region}
+SVP_DS_SECRET_ID=${secret_id}
+SVP_DS_DB=${db_name}
+SVP_DS_CA=/opt/svp-lab-ds/rds-ca.pem
+SVP_DS_PROXY_CA=/opt/svp-lab-ds/proxy-ca.pem
+SVP_DS_RUN=/var/lib/svp-lab-ds
+EOF
+
+echo '${pg}' | base64 -d | gunzip >/opt/svp-lab-ds/pg.sh
+chmod 0755 /opt/svp-lab-ds/pg.sh

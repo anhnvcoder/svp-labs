@@ -1,0 +1,19 @@
+#!/bin/bash
+# Boot script of the loader of the valkey part of the data-scaling lab: valkey-cli and valkey-benchmark (built with
+# TLS, from the valkey package of the distribution), jq, dig, and kv.sh. Holds no secret and no endpoint: kv.sh reads
+# the password from Secrets Manager and takes each endpoint as an argument at run time.
+set -euo pipefail
+
+dnf install -y valkey jq bind-utils
+install -d -m 0755 /opt/svp-lab-ds /var/lib/svp-lab-ds
+
+# The system's trusted roots, named as a file so that every client command shows the CA it checks against.
+cat >/etc/svp-lab-ds-kv.conf <<'EOF'
+SVP_DS_REGION=${region}
+SVP_DS_SECRET_ID=${secret_id}
+SVP_DS_CA=/etc/pki/tls/certs/ca-bundle.crt
+SVP_DS_RUN=/var/lib/svp-lab-ds
+EOF
+
+echo '${kv}' | base64 -d | gunzip >/opt/svp-lab-ds/kv.sh
+chmod 0755 /opt/svp-lab-ds/kv.sh
