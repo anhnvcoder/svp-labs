@@ -47,6 +47,7 @@ make help                     # liệt kê target
 | [`serverless-variant/`](https://github.com/anhnvcoder/svp-labs/tree/main/serverless-variant) | Lượt xem và điều phối transcode làm bằng dịch vụ serverless (API Gateway, SQS, Lambda, DynamoDB, S3, EventBridge, Step Functions) thì được và mất gì so với EKS: độ trễ, đúng một lần, đường lỗi, chi phí mỗi triệu event | — |
 | [`multi-region-dr/`](https://github.com/anhnvcoder/svp-labs/tree/main/multi-region-dr) | Mất cả region chính, tầng dữ liệu phục vụ lại ở region thứ hai sau bao lâu (RTO) và mất bao nhiêu dữ liệu (RPO), khi dùng read replica chéo region so với restore từ backup đã sao sang region kia | — |
 | [`dms-migration/`](https://github.com/anhnvcoder/svp-labs/tree/main/dms-migration) | Chuyển database từ PostgreSQL tự quản sang RDS bằng DMS thì full load mất bao lâu, CDC trễ bao nhiêu, cutover dừng ghi bao lâu, và bước nào chiếm phần lớn downtime | — |
+| [`data-scaling/`](https://github.com/anhnvcoder/svp-labs/tree/main/data-scaling) | Aurora và RDS PostgreSQL có read replica dưới tải ghi đều thì replica trễ bao nhiêu và failover làm client lỗi bao lâu; RDS Proxy làm database thấy bao nhiêu kết nối và tốn bao nhiêu; Valkey cluster mode bật so với tắt thì client thấy gì, reshard và failover lỗi bao lâu; chia đọc ghi ở client có giảm p95 không; partition `timeline` so với `DELETE` theo lô và `DETACH` khi dọn dữ liệu | — |
 
 ## Đóng góp
 
