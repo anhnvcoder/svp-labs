@@ -541,7 +541,8 @@ region = ap-southeast-1
 
 ```sh
 AWS_PROFILE=anhnv-stg aws ec2 describe-instance-type-offerings --no-cli-pager --location-type availability-zone-id \
-  --filters Name=instance-type,Values=t4g.nano --region ap-southeast-1 --query 'InstanceTypeOfferings[].Location' --output text
+  --filters Name=instance-type,Values=t4g.nano --region ap-southeast-1 --query 'InstanceTypeOfferings[].Location' \
+  --output text
 ```
 
 Lệnh liệt kê các zone ID có loại instance đó [N22]. Không thấy `apse1-az1` thì thêm dòng
@@ -619,7 +620,8 @@ với bảng route ở mục Thiết kế.
 ```sh
 echo "$P" | jq -r 'to_entries[] | "\(.key) \(.value.private_ip)"'
 AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core output -raw nat_public_ip
-AWS_PROFILE=anhnv-stg aws ssm start-session --no-cli-pager --target "$(jq -r .stg.instance_id <<<"$P")" --region ap-southeast-1
+AWS_PROFILE=anhnv-stg aws ssm start-session --no-cli-pager --target "$(jq -r .stg.instance_id <<<"$P")" \
+  --region ap-southeast-1
 ```
 
 Trong phiên (thay `<ip shared>`, `<ip prd>` bằng địa chỉ in ở lệnh đầu):
@@ -642,9 +644,11 @@ shared-probe.nonprd.svp.example` không in gì. Lặp `curl checkip` ở probe-s
 `.shared.instance_id`). Chủ của subnet chứa probe-shared, đọc từ stg:
 
 ```sh
-S=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --no-cli-pager --instance-ids "$(jq -r .shared.instance_id <<<"$P")" --region ap-southeast-1 \
+S=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --no-cli-pager \
+  --instance-ids "$(jq -r .shared.instance_id <<<"$P")" --region ap-southeast-1 \
   --query 'Reservations[0].Instances[0].SubnetId' --output text)
-AWS_PROFILE=anhnv-stg aws ec2 describe-subnets --no-cli-pager --subnet-ids "$S" --region ap-southeast-1 --query 'Subnets[0].OwnerId' --output text
+AWS_PROFILE=anhnv-stg aws ec2 describe-subnets --no-cli-pager --subnet-ids "$S" --region ap-southeast-1 \
+  --query 'Subnets[0].OwnerId' --output text
 ```
 
 Số in ra bằng `$SVP_AWS_NETWORK_ACCOUNT_ID`. Dán lại mọi output.
@@ -658,8 +662,10 @@ mỗi giờ), gỡ khi xong.
 **6. Chi phí thật** (ngày sau buổi, thay `<ngày>` bằng ngày UTC của buổi, `<ngày sau>` bằng ngày kế tiếp):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --no-cli-pager --time-period Start=<ngày>,End=<ngày sau> --granularity DAILY \
-  --metrics UnblendedCost --group-by Type=DIMENSION,Key=LINKED_ACCOUNT Type=DIMENSION,Key=USAGE_TYPE --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --no-cli-pager --time-period Start=<ngày>,End=<ngày sau> \
+  --granularity DAILY \
+  --metrics UnblendedCost --group-by Type=DIMENSION,Key=LINKED_ACCOUNT Type=DIMENSION,Key=USAGE_TYPE \
+  --region us-east-1 \
   --filter '{"Dimensions":{"Key":"USAGE_TYPE","Values":["APS1-TransitGateway-Hours","APS1-TransitGateway-Bytes",
 "APS1-NatGateway-Hours","APS1-NatGateway-Bytes","APS1-DNS-ProfileBasePackage","APS1-Analysis-Runs","APS1-BoxUsage:t4g.nano"]}}'
 ```
@@ -723,7 +729,8 @@ AWS_PROFILE=anhnv-network aws ec2 describe-vpn-connections --no-cli-pager --regi
 Mong đợi hai dòng `UP`. Còn `DOWN` sau 10 phút thì mở phiên tới router:
 
 ```sh
-AWS_PROFILE=anhnv-network aws ssm start-session --no-cli-pager --target "$(jq -r .router.instance_id <<<"$S")" --region ap-southeast-1
+AWS_PROFILE=anhnv-network aws ssm start-session --no-cli-pager --target "$(jq -r .router.instance_id <<<"$S")" \
+  --region ap-southeast-1
 ```
 
 Trong phiên, dán lại output của:
@@ -758,7 +765,8 @@ Mong đợi: chỉ `module.site.aws_instance.router` `must be replaced`.
 
 ```sh
 AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core output -json probes | jq -r '.stg.private_ip'
-AWS_PROFILE=anhnv-network aws ssm start-session --no-cli-pager --target "$(jq -r .host.instance_id <<<"$S")" --region ap-southeast-1
+AWS_PROFILE=anhnv-network aws ssm start-session --no-cli-pager --target "$(jq -r .host.instance_id <<<"$S")" \
+  --region ap-southeast-1
 ```
 
 Trong phiên (thay `<ip stg>` bằng địa chỉ in ở lệnh đầu):
@@ -828,8 +836,10 @@ sudo ip route add 10.64.0.0/16 dev vti1 src 192.168.0.10 metric 100
 **12. Chi phí thật phần hybrid** (ngày sau buổi, như bước 6):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --no-cli-pager --time-period Start=<ngày>,End=<ngày sau> --granularity DAILY \
-  --metrics UnblendedCost --group-by Type=DIMENSION,Key=LINKED_ACCOUNT Type=DIMENSION,Key=USAGE_TYPE --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --no-cli-pager --time-period Start=<ngày>,End=<ngày sau> \
+  --granularity DAILY \
+  --metrics UnblendedCost --group-by Type=DIMENSION,Key=LINKED_ACCOUNT Type=DIMENSION,Key=USAGE_TYPE \
+  --region us-east-1 \
   --filter '{"Dimensions":{"Key":"USAGE_TYPE","Values":["APS1-VPN-Usage-Hours:ipsec.1","APS1-ResolverNetworkInterface",
 "APS1-LoadBalancerUsage","APS1-VpcEndpoint-Hours","APS1-PublicIPv4:InUseAddress","APS1-AWSSecretsManager-Secret"]}}'
 ```
@@ -917,7 +927,8 @@ lại đúng như `aws_service_access_principals` của
 ```sh
 for p in anhnv-network anhnv-stg anhnv-prd anhnv-sso; do for r in ap-southeast-1 us-east-1; do
   echo "== $p $r"
-  AWS_PROFILE=$p aws resourcegroupstaggingapi get-resources --no-cli-pager --tag-filters Key=Lab,Values=multi-account-networking --region "$r" \
+  AWS_PROFILE=$p aws resourcegroupstaggingapi get-resources --no-cli-pager \
+    --tag-filters Key=Lab,Values=multi-account-networking --region "$r" \
     --query 'ResourceTagMappingList[].ResourceARN' --output text
 done; done
 ```
@@ -927,23 +938,31 @@ Theo tiền tố tên và loại tính tiền theo giờ (có thể sót tag):
 ```sh
 for p in anhnv-network anhnv-stg anhnv-prd; do
   echo "== $p"
-  AWS_PROFILE=$p aws ec2 describe-transit-gateway-attachments --no-cli-pager --filters Name=tag:Name,Values='svp-lab-net*' \
+  AWS_PROFILE=$p aws ec2 describe-transit-gateway-attachments --no-cli-pager \
+    --filters Name=tag:Name,Values='svp-lab-net*' \
     Name=state,Values=pendingAcceptance,pending,available,modifying --region ap-southeast-1 \
     --query 'TransitGatewayAttachments[].TransitGatewayAttachmentId' --output text
   AWS_PROFILE=$p aws ec2 describe-instances --no-cli-pager --filters Name=tag:Name,Values='svp-lab-net-*' \
     Name=instance-state-name,Values=pending,running,stopping,stopped --region ap-southeast-1 \
     --query 'Reservations[].Instances[].InstanceId' --output text
 done
-AWS_PROFILE=anhnv-network aws ec2 describe-nat-gateways --no-cli-pager --filter Name=state,Values=pending,available,deleting \
+AWS_PROFILE=anhnv-network aws ec2 describe-nat-gateways --no-cli-pager \
+  --filter Name=state,Values=pending,available,deleting \
   --region ap-southeast-1 --query 'NatGateways[].NatGatewayId' --output text
-AWS_PROFILE=anhnv-network aws ec2 describe-addresses --no-cli-pager --region ap-southeast-1 --query 'Addresses[].AllocationId' --output text
-AWS_PROFILE=anhnv-network aws ec2 describe-transit-gateways --no-cli-pager --filters Name=state,Values=pending,available,modifying \
+AWS_PROFILE=anhnv-network aws ec2 describe-addresses --no-cli-pager --region ap-southeast-1 \
+  --query 'Addresses[].AllocationId' --output text
+AWS_PROFILE=anhnv-network aws ec2 describe-transit-gateways --no-cli-pager \
+  --filters Name=state,Values=pending,available,modifying \
   --region ap-southeast-1 --query 'TransitGateways[].TransitGatewayId' --output text
-AWS_PROFILE=anhnv-network aws route53profiles list-profiles --no-cli-pager --region ap-southeast-1 --query 'ProfileSummaries[].Name' --output text
-AWS_PROFILE=anhnv-network aws route53 list-hosted-zones --no-cli-pager --region us-east-1 --query 'HostedZones[].Name' --output text
-AWS_PROFILE=anhnv-network aws ram get-resource-shares --no-cli-pager --resource-owner SELF --resource-share-status ACTIVE --region ap-southeast-1 \
+AWS_PROFILE=anhnv-network aws route53profiles list-profiles --no-cli-pager --region ap-southeast-1 \
+  --query 'ProfileSummaries[].Name' --output text
+AWS_PROFILE=anhnv-network aws route53 list-hosted-zones --no-cli-pager --region us-east-1 --query 'HostedZones[].Name' \
+  --output text
+AWS_PROFILE=anhnv-network aws ram get-resource-shares --no-cli-pager --resource-owner SELF \
+  --resource-share-status ACTIVE --region ap-southeast-1 \
   --query 'resourceShares[].name' --output text
-AWS_PROFILE=anhnv-sso aws ec2 describe-network-insights-paths --no-cli-pager --filters Name=tag:Lab,Values=multi-account-networking \
+AWS_PROFILE=anhnv-sso aws ec2 describe-network-insights-paths --no-cli-pager \
+  --filters Name=tag:Lab,Values=multi-account-networking \
   --region ap-southeast-1 --query 'NetworkInsightsPaths[].NetworkInsightsPathId' --output text
 ```
 
@@ -951,15 +970,18 @@ Thêm cho phần hybrid (loại tính tiền theo giờ ở `svp-network`, `svp-
 đầu bằng `s2svpn` [N29]):
 
 ```sh
-AWS_PROFILE=anhnv-network aws ec2 describe-vpn-connections --no-cli-pager --filters Name=state,Values=pending,available,deleting \
+AWS_PROFILE=anhnv-network aws ec2 describe-vpn-connections --no-cli-pager \
+  --filters Name=state,Values=pending,available,deleting \
   --region ap-southeast-1 --query 'VpnConnections[].VpnConnectionId' --output text
-AWS_PROFILE=anhnv-network aws ec2 describe-customer-gateways --no-cli-pager --filters Name=state,Values=pending,available \
+AWS_PROFILE=anhnv-network aws ec2 describe-customer-gateways --no-cli-pager \
+  --filters Name=state,Values=pending,available \
   --region ap-southeast-1 --query 'CustomerGateways[].CustomerGatewayId' --output text
 AWS_PROFILE=anhnv-network aws route53resolver list-resolver-endpoints --no-cli-pager --region ap-southeast-1 \
   --query 'ResolverEndpoints[].Name' --output text
 AWS_PROFILE=anhnv-network aws route53resolver list-resolver-rules --no-cli-pager --region ap-southeast-1 \
   --query 'ResolverRules[?RuleType==`FORWARD`].Name' --output text
-AWS_PROFILE=anhnv-network aws secretsmanager list-secrets --no-cli-pager --filters Key=name,Values=s2svpn --region ap-southeast-1 \
+AWS_PROFILE=anhnv-network aws secretsmanager list-secrets --no-cli-pager --filters Key=name,Values=s2svpn \
+  --region ap-southeast-1 \
   --query 'SecretList[].Name' --output text
 AWS_PROFILE=anhnv-prd aws ec2 describe-vpc-endpoint-service-configurations --no-cli-pager --region ap-southeast-1 \
   --query 'ServiceConfigurations[].ServiceId' --output text
@@ -1002,15 +1024,18 @@ Số in ra phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID`; khác thì dừng. Rồi đ
 (`prevent_destroy` chặn mọi plan gỡ nó):
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations close-account --no-cli-pager --account-id "$SVP_AWS_NETWORK_ACCOUNT_ID" --region us-east-1 \
+AWS_PROFILE=anhnv-sso aws organizations close-account --no-cli-pager --account-id "$SVP_AWS_NETWORK_ACCOUNT_ID" \
+  --region us-east-1 \
   && AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account state rm aws_organizations_account.network
 ```
 
 Sau khi AWS gỡ hẳn account khỏi OU (lệnh dưới không in id nào), gỡ OU theo cùng khuôn:
 
 ```sh
-AWS_PROFILE=anhnv-sso aws organizations list-accounts-for-parent --no-cli-pager --region us-east-1 --query 'Accounts[].Id' --output text \
-  --parent-id "$(AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account output -raw infrastructure_ou_id)"
+AWS_PROFILE=anhnv-sso aws organizations list-accounts-for-parent --no-cli-pager --region us-east-1 \
+  --query 'Accounts[].Id' --output text \
+  --parent-id "$(AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account \
+    output -raw infrastructure_ou_id)"
 AWS_PROFILE=anhnv-sso \
 TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
   terraform -chdir=multi-account-networking/account plan -destroy -input=false -out=multi-account-networking-account-destroy.tfplan

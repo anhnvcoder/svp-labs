@@ -257,7 +257,8 @@ fail control `DMS.1`; NAT Gateway 0,059. So DMS Serverless: ít nhất 0,122 m�
   ```sh
   AWS_PROFILE=anhnv-stg aws iam get-role --no-cli-pager --role-name dms-vpc-role --query Role.Arn --output text \
     --region ap-southeast-1
-  AWS_PROFILE=anhnv-stg aws iam get-role --no-cli-pager --role-name dms-cloudwatch-logs-role --query Role.Arn --output text \
+  AWS_PROFILE=anhnv-stg aws iam get-role --no-cli-pager --role-name dms-cloudwatch-logs-role --query Role.Arn \
+    --output text \
     --region ap-southeast-1
   ```
 

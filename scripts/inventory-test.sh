@@ -166,6 +166,17 @@ tests=$(grep '^ARGS' "$log" | grep -- " $tf_image test ")
 expect "write: every terraform test runs with --network none" test -z "$(echo "$tests" | grep -v -- ' --network none ')"
 expect "write: every d2 render runs with --network none" \
   test -z "$(grep '^ARGS' "$log" | grep -- ' --entrypoint d2 ' | grep -v -- ' --network none ')"
+# The fake docker runs any jq, so the flags of jq() in inventory.sh are checked on the logged call: no network, and one
+# mount of a directory onto itself, read-only.
+jqs=$(grep '^ARGS' "$log" | grep -- " $jq_image ")
+expect "write: jq ran in docker" test -n "$jqs"
+expect "write: every jq call runs with --network none" test -z "$(echo "$jqs" | grep -v -- ' --network none ')"
+odd=$(echo "$jqs" | while IFS= read -r line; do
+  m=$(echo "$line" | awk '{ for (i = 1; i <= NF; i++) if ($i == "-v") print $(++i) }')
+  [ "$(echo "$m" | wc -l | tr -d ' ')" -eq 1 ] && [ -n "$m" ] && [ "${m%%:*}" = "$(echo "$m" | cut -d: -f2)" ] &&
+    [ "${m##*:}" = ro ] || echo "$line"
+done)
+expect "write: every jq call mounts one directory onto itself, read-only, nothing else" test -z "$odd"
 want="CACHE:/plugin-cache:ro COPY:/src:ro DATA:/tfdata "
 odd=$(echo "$tests" | while IFS= read -r line; do [ "$(mounts "$line")" = "$want" ] || echo "$line"; done)
 expect "write: terraform test mounts the copy (read-only), its data and the provider cache (read-only), nothing else" \
