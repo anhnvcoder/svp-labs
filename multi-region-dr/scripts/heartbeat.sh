@@ -7,6 +7,7 @@
 # carries that host and not the CNAME; the row carries this machine's clock, and the log gets one line per attempt.
 # Usage: heartbeat.sh setup | start primary|dr | write primary|dr [ATTEMPTS] | stop | report HOST
 set -euo pipefail
+export AWS_PAGER=""
 
 conf=${SVP_DR_CONF:-/etc/svp-lab-dr.conf}
 # shellcheck source=/dev/null

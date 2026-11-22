@@ -17,7 +17,8 @@ mkdir -p "$bin" "$answers"
 log=$work/calls.log
 failures=0
 
-unset AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+unset SVP_AWS_STG_ACCOUNT_ID AWS_PAGER AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export FAKE_LOG=$log FAKE_DIR=$work REAL_DATE
 REAL_DATE=$(command -v date)
 command -v jq >/dev/null || { echo "FAIL  jq is needed by drill.sh and this test" >&2; exit 1; }

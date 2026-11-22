@@ -9,6 +9,7 @@
 # Usage: pg.sh init HOST | load HOST RATE SECONDS | lag WRITER READER [SAMPLES] | probe write|read SECONDS HOST [HOST] |
 #   burst HOST CLIENTS SECONDS | read HOST RATE SECONDS | window LOG
 set -euo pipefail
+export AWS_PAGER=""
 
 conf=${SVP_DS_CONF:-/etc/svp-lab-ds-pg.conf}
 # shellcheck source=/dev/null

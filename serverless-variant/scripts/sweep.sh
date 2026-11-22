@@ -4,6 +4,7 @@
 # ap-southeast-1 and in IAM. Every list should be empty; the script exits 1 when one is not.
 # Usage: scripts/sweep.sh
 set -euo pipefail
+export AWS_PAGER=""
 
 readonly profile=anhnv-stg
 readonly region=ap-southeast-1

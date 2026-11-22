@@ -4,12 +4,6 @@
 mock_provider "aws" {
   alias = "primary"
 
-  mock_resource "aws_db_instance" {
-    defaults = {
-      arn = "arn:aws:rds:ap-southeast-1:000000000000:db:svp-lab-dr-primary"
-    }
-  }
-
   mock_data "aws_partition" {
     defaults = {
       partition  = "aws"

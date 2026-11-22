@@ -20,7 +20,8 @@ primary=master.svp-lab-ds-cmd.abc123.apse1.cache.amazonaws.com
 export REAL_DATE
 REAL_DATE=$(command -v date)
 
-unset AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+unset SVP_AWS_STG_ACCOUNT_ID AWS_PAGER AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export FAKE_LOG=$log FAKE_DIR=$state FAKE_CID=$cid FAKE_CFG=$cfg FAKE_PRIMARY=$primary
 
 # The learner's machine signs in with profile anhnv-stg and names the Region on every call. svp-lab-ds-cme has node

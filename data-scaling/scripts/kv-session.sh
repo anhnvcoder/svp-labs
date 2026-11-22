@@ -8,6 +8,7 @@
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/kv-session.sh check | groups | run ARGS... | start ARGS... | result ID |
 #   reshard SHARDS | failover cme|cmd NODE_GROUP | events [MINUTES]
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 region=ap-southeast-1

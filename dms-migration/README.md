@@ -234,7 +234,7 @@ fail control `DMS.1`; NAT Gateway 0,059. So DMS Serverless: ít nhất 0,122 m�
   lần cho mọi profile cùng phiên:
 
   ```sh
-  AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+  AWS_PROFILE=anhnv-sso aws sso login --no-cli-pager --region us-east-1
   ```
 
 - [ ] **Biến account:** `SVP_AWS_STG_ACCOUNT_ID` (12 số của `svp-stg`) export trong terminal, không ghi vào file nào. Script của bài
@@ -248,16 +248,16 @@ fail control `DMS.1`; NAT Gateway 0,059. So DMS Serverless: ít nhất 0,122 m�
 - [ ] **Kiểm account** trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
 
   ```sh
-  AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+  AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
   ```
 
 - [ ] **Hai role cấp account của DMS và `dms.auto.tfvars`.** Mỗi lệnh in ARN của role khi role có sẵn, hay lỗi `NoSuchEntity` khi
   chưa có. Dán lại output.
 
   ```sh
-  AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-vpc-role --query Role.Arn --output text \
+  AWS_PROFILE=anhnv-stg aws iam get-role --no-cli-pager --role-name dms-vpc-role --query Role.Arn --output text \
     --region ap-southeast-1
-  AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-cloudwatch-logs-role --query Role.Arn --output text \
+  AWS_PROFILE=anhnv-stg aws iam get-role --no-cli-pager --role-name dms-cloudwatch-logs-role --query Role.Arn --output text \
     --region ap-southeast-1
   ```
 
@@ -334,7 +334,7 @@ cutover tối đa 900 s mỗi cổng; gỡ ~15 phút cộng quét.
    nào) và thoát 0; lỗi `No such file` nghĩa là script boot chưa xong: chờ một phút rồi chạy lại.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --no-cli-pager --region ap-southeast-1 --output text \
      --query 'InstanceInformationList[].[InstanceId,PingStatus]'
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run slots
    ```
@@ -460,7 +460,7 @@ Chạy đủ bốn bước trước khi kết thúc buổi, kể cả khi buổi
    ```sh
    rm -f dms-migration/terraform/terraform.tfstate dms-migration/terraform/terraform.tfstate.backup \
      dms-migration/terraform/*.tfplan
-   rm -rf "$SVP_LAB_SESSION_DIR"
+   rm -rf "${SVP_LAB_SESSION_DIR:?}"
    ```
 
 ## Sau buổi

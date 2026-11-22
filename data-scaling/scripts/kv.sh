@@ -9,6 +9,7 @@
 # Usage: kv.sh probe SECONDS HOST [SLOTS] | bench SECONDS HOST cluster|plain | client CME_HOST CMD_HOST | window LOG |
 #   rates LOG
 set -euo pipefail
+export AWS_PAGER=""
 
 conf=${SVP_DS_CONF:-/etc/svp-lab-ds-kv.conf}
 # shellcheck source=/dev/null

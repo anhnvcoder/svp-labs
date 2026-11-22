@@ -14,7 +14,8 @@ mkdir -p "$bin" "$answers"
 log=$work/calls.log
 failures=0
 
-unset AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+unset SVP_AWS_STG_ACCOUNT_ID AWS_PAGER AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export FAKE_LOG=$log FAKE_DIR=$work
 
 # The fake aws answers $answers/<service>_<command>, else lists nothing; an answer that reads FAIL exits 255 as the CLI

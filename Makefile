@@ -22,6 +22,10 @@ SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6fe
 # D2 from its official image, a multi-architecture index: the SVGs come out byte for byte the same on arm64 and amd64.
 # renovate: datasource=docker depName=d2lang/d2
 D2_IMAGE         := d2lang/d2:v0.9.0@sha256:0f9237e0213338415de5ef7436c92450ddd04e0e6e7df2db3f41387322df97b9
+# jq of the inventory generator: the runner of CI and a dev machine ship different jq versions, and a program one of
+# them accepts the other rejects. The same image runs it on both.
+# renovate: datasource=docker depName=ghcr.io/jqlang/jq
+JQ_IMAGE         := ghcr.io/jqlang/jq:1.8.2@sha256:b9c68867e5766576263a222e91db3de422d802069c7af70440e667a95344e486
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -317,12 +321,12 @@ lock: ## Write the lock file of each root below DIRS (default: every root) with 
 # What each root of the SAP labs creates on an empty account, from a plan of terraform test against mock providers
 # (scripts/inventory/): <lab>/docs/inventory.md and docs/diagrams/inventory/. The plans run on a copy of the labs
 # without personal files, under the rules of make test (no network but init, no credential); scripts/inventory-test.sh
-# checks them. Needs jq.
+# checks them.
 inventory: ## Write <lab>/docs/inventory.md and docs/diagrams/inventory/ from mock plans of every root (no network, no credential)
-	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash scripts/inventory.sh write
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' JQ_IMAGE='$(JQ_IMAGE)' bash scripts/inventory.sh write
 
 inventory-check: ## Fails, naming the file, when an inventory page or a diagram of it differs from what make inventory writes
-	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash scripts/inventory.sh check
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' JQ_IMAGE='$(JQ_IMAGE)' bash scripts/inventory.sh check
 
 go-test: ## gofmt -l, go vet, go test -race in each Go module below DIRS (default: the repository but drills/; host Go)
 	@mods=$$($(GO_MODULES)) || exit 1; [ -n "$$mods" ] || { echo "go-test: no Go module"; exit 0; }; \

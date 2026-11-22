@@ -8,6 +8,7 @@
 # Usage: scripts/measure.sh load URL [RATE] [DURATION]
 #        SVP_AWS_STG_ACCOUNT_ID=<id> scripts/measure.sh e2e [MINUTES] | duplicate | transcode
 set -euo pipefail
+export AWS_PAGER=""
 
 readonly profile=anhnv-stg
 readonly region=ap-southeast-1

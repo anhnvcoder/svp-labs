@@ -15,13 +15,18 @@
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
-: "${TERRAFORM_IMAGE:?set by make inventory}" "${D2_IMAGE:?set by make inventory}"
+: "${TERRAFORM_IMAGE:?set by make inventory}" "${D2_IMAGE:?set by make inventory}" "${JQ_IMAGE:?set by make inventory}"
 diagrams=docs/diagrams/inventory
 cache=$repo/.plugin-cache
 
 # No credential reaches a container: no AWS_* variable lives on in this shell, and docker gets no -e of one.
 while IFS= read -r v; do unset "$v"; done < <(compgen -e | grep '^AWS_' || true)
 unset DOCKER_DEFAULT_PLATFORM
+
+# jq from JQ_IMAGE, the same version on every machine; it reads only below $work, mounted read-only.
+jq() {
+  docker run --rm -i --network none --user "$(id -u):$(id -g)" -v "$work:$work:ro" "$JQ_IMAGE" "$@"
+}
 
 LABS=(multi-account-networking serverless-variant multi-region-dr dms-migration data-scaling)
 ROOTS=("multi-account-networking/account" "multi-account-networking/core" "multi-account-networking/hybrid"
@@ -415,7 +420,6 @@ generate() {
 main() {
   local mode=${1:-} out f page rc=0
   case $mode in write | check) ;; *) echo "usage: scripts/inventory.sh write|check" >&2 && exit 2 ;; esac
-  command -v jq >/dev/null || fail "jq is not installed"
   work=$(mktemp -d)
   locked=
   trap 'unlock; rm -rf "$work"' EXIT
