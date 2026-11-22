@@ -3,6 +3,7 @@
 # Reads one path from its arguments; writes one line (UTC time, path, expected, found, verdict, seconds, explanation
 # codes) and exits 1 when the path is not as expected. It deletes the path and the analysis it creates on exit.
 set -euo pipefail
+export AWS_PAGER=""
 
 readonly REGION="ap-southeast-1"
 readonly LAB="multi-account-networking"

@@ -224,7 +224,7 @@ Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
 1. **Kiểm account** trước lệnh ghi đầu tiên.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
    ```
 
    - Mong đợi, dán lại: 12 số bằng `$SVP_AWS_STG_ACCOUNT_ID`.
@@ -280,9 +280,9 @@ Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
 6. **Chờ SSM agent** của hai bastion.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --no-cli-pager --region ap-southeast-1 --output text \
      --query 'InstanceInformationList[].[InstanceId,PingStatus]'
-   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region us-east-1 --output text \
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --no-cli-pager --region us-east-1 --output text \
      --query 'InstanceInformationList[].[InstanceId,PingStatus]'
    ```
 
@@ -367,11 +367,11 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 1. **Mở lại đường bastion chính** tới security group của database chính (bản failback dùng chung group này).
 
    ```sh
-   SG=$(AWS_PROFILE=anhnv-stg aws ec2 describe-security-groups --region ap-southeast-1 \
+   SG=$(AWS_PROFILE=anhnv-stg aws ec2 describe-security-groups --no-cli-pager --region ap-southeast-1 \
      --filters Name=group-name,Values=svp-lab-dr-primary-db --query 'SecurityGroups[0].GroupId' --output text)
-   BASTION_SG=$(AWS_PROFILE=anhnv-stg aws ec2 describe-security-groups --region ap-southeast-1 \
+   BASTION_SG=$(AWS_PROFILE=anhnv-stg aws ec2 describe-security-groups --no-cli-pager --region ap-southeast-1 \
      --filters Name=group-name,Values=svp-lab-dr-bastion-primary --query 'SecurityGroups[0].GroupId' --output text)
-   AWS_PROFILE=anhnv-stg aws ec2 authorize-security-group-ingress --region ap-southeast-1 --group-id "$SG" \
+   AWS_PROFILE=anhnv-stg aws ec2 authorize-security-group-ingress --no-cli-pager --region ap-southeast-1 --group-id "$SG" \
      --ip-permissions "IpProtocol=tcp,FromPort=5432,ToPort=5432,UserIdGroupPairs=[{GroupId=$BASTION_SG}]"
    ```
 
@@ -380,12 +380,12 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 2. **Tạo replica chiều ngược** với khoá `aws/rds` của `ap-southeast-1` (instance nguồn đã có backup từ lúc promote).
 
    ```sh
-   SRC=$(AWS_PROFILE=anhnv-stg aws rds describe-db-instances --region us-east-1 \
+   SRC=$(AWS_PROFILE=anhnv-stg aws rds describe-db-instances --no-cli-pager --region us-east-1 \
      --db-instance-identifier svp-lab-dr-replica --query 'DBInstances[0].DBInstanceArn' --output text)
-   KEY=$(AWS_PROFILE=anhnv-stg aws kms describe-key --region ap-southeast-1 --key-id alias/aws/rds \
+   KEY=$(AWS_PROFILE=anhnv-stg aws kms describe-key --no-cli-pager --region ap-southeast-1 --key-id alias/aws/rds \
      --query KeyMetadata.Arn --output text)
    date -u
-   AWS_PROFILE=anhnv-stg aws rds create-db-instance-read-replica --region ap-southeast-1 --source-region us-east-1 \
+   AWS_PROFILE=anhnv-stg aws rds create-db-instance-read-replica --no-cli-pager --region ap-southeast-1 --source-region us-east-1 \
      --db-instance-identifier svp-lab-dr-fb --source-db-instance-identifier "$SRC" --kms-key-id "$KEY" \
      --db-instance-class db.t4g.micro --db-subnet-group-name svp-lab-dr-primary --vpc-security-group-ids "$SG" \
      --no-publicly-accessible --tags Key=Project,Value=svp Key=Lab,Value=multi-region-dr \
@@ -397,7 +397,7 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 3. **Chờ replica sẵn sàng**, ghi giờ xong (thời gian dựng replica ngược).
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws rds wait db-instance-available --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-stg aws rds wait --no-cli-pager db-instance-available --region ap-southeast-1 \
      --db-instance-identifier svp-lab-dr-fb
    date -u
    ```
@@ -407,10 +407,10 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 4. **Dừng ghi ở phía DR** (cửa sổ cắt của failback).
 
    ```sh
-   DR_BASTION=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --region us-east-1 \
+   DR_BASTION=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --no-cli-pager --region us-east-1 \
      --filters Name=tag:Name,Values=svp-lab-dr-bastion-dr Name=instance-state-name,Values=running \
      --query 'Reservations[].Instances[].InstanceId' --output text)
-   AWS_PROFILE=anhnv-stg aws ssm send-command --region us-east-1 --instance-ids "$DR_BASTION" \
+   AWS_PROFILE=anhnv-stg aws ssm send-command --no-cli-pager --region us-east-1 --instance-ids "$DR_BASTION" \
      --document-name AWS-RunShellScript --parameters 'commands=["/opt/svp-lab-dr/heartbeat.sh stop"]' \
      --query Command.CommandId --output text
    ```
@@ -420,14 +420,14 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 5. **Promote `svp-lab-dr-fb`** khi `ReplicaLag` về 0, chờ nó độc lập.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws cloudwatch get-metric-statistics --region ap-southeast-1 --namespace AWS/RDS \
+   AWS_PROFILE=anhnv-stg aws cloudwatch get-metric-statistics --no-cli-pager --region ap-southeast-1 --namespace AWS/RDS \
      --metric-name ReplicaLag --dimensions Name=DBInstanceIdentifier,Value=svp-lab-dr-fb \
      --period 60 --statistics Maximum \
      --start-time "$(date -u -v-5M +%Y-%m-%dT%H:%M:%SZ)" --end-time "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
      --query 'Datapoints[].Maximum' --output text
-   AWS_PROFILE=anhnv-stg aws rds promote-read-replica --region ap-southeast-1 --db-instance-identifier svp-lab-dr-fb \
+   AWS_PROFILE=anhnv-stg aws rds promote-read-replica --no-cli-pager --region ap-southeast-1 --db-instance-identifier svp-lab-dr-fb \
      --backup-retention-period 1 --query 'DBInstance.DBInstanceStatus' --output text
-   AWS_PROFILE=anhnv-stg aws rds wait db-instance-available --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-stg aws rds wait --no-cli-pager db-instance-available --region ap-southeast-1 \
      --db-instance-identifier svp-lab-dr-fb
    date -u
    ```
@@ -438,17 +438,17 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 6. **Trỏ bản ghi PRIMARY sang `svp-lab-dr-fb`** rồi đóng công tắc.
 
    ```sh
-   ZONE=$(AWS_PROFILE=anhnv-stg aws route53 list-hosted-zones-by-name --region us-east-1 \
+   ZONE=$(AWS_PROFILE=anhnv-stg aws route53 list-hosted-zones-by-name --no-cli-pager --region us-east-1 \
      --dns-name svp-lab-dr.internal --query "HostedZones[?Name=='svp-lab-dr.internal.'] | [0].Id" --output text)
-   FB=$(AWS_PROFILE=anhnv-stg aws rds describe-db-instances --region ap-southeast-1 \
+   FB=$(AWS_PROFILE=anhnv-stg aws rds describe-db-instances --no-cli-pager --region ap-southeast-1 \
      --db-instance-identifier svp-lab-dr-fb --query 'DBInstances[0].Endpoint.Address' --output text)
-   HC=$(AWS_PROFILE=anhnv-stg aws route53 list-health-checks --region us-east-1 --output text \
+   HC=$(AWS_PROFILE=anhnv-stg aws route53 list-health-checks --no-cli-pager --region us-east-1 --output text \
      --query "HealthChecks[?HealthCheckConfig.AlarmIdentifier.Name=='svp-lab-dr-failover'] | [0].Id")
-   AWS_PROFILE=anhnv-stg aws route53 change-resource-record-sets --region us-east-1 --hosted-zone-id "$ZONE" \
+   AWS_PROFILE=anhnv-stg aws route53 change-resource-record-sets --no-cli-pager --region us-east-1 --hosted-zone-id "$ZONE" \
      --change-batch "$(jq -cn --arg h "$FB" --arg hc "$HC" '{Changes: [{Action: "UPSERT", ResourceRecordSet: {
        Name: "db.svp-lab-dr.internal", Type: "CNAME", SetIdentifier: "primary", Failover: "PRIMARY", TTL: 10,
        HealthCheckId: $hc, ResourceRecords: [{Value: $h}]}}]}')" --query ChangeInfo.Status --output text
-   AWS_PROFILE=anhnv-stg aws cloudwatch put-metric-data --region us-east-1 --namespace svp-lab-dr \
+   AWS_PROFILE=anhnv-stg aws cloudwatch put-metric-data --no-cli-pager --region us-east-1 --namespace svp-lab-dr \
      --metric-name FailoverRequested --value 0
    ```
 
@@ -457,14 +457,14 @@ nó rồi đưa DNS về. Bản ghi SECONDARY lúc này trỏ `svp-lab-dr-pitr`;
 7. **Kiểm** writer chính (chạy từ bước 7 của buổi) ghi lại được vào `svp-lab-dr-fb`, và dữ liệu ghi ở phía DR đã về.
 
    ```sh
-   PRIMARY_BASTION=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --region ap-southeast-1 \
+   PRIMARY_BASTION=$(AWS_PROFILE=anhnv-stg aws ec2 describe-instances --no-cli-pager --region ap-southeast-1 \
      --filters Name=tag:Name,Values=svp-lab-dr-bastion-primary Name=instance-state-name,Values=running \
      --query 'Reservations[].Instances[].InstanceId' --output text)
-   CMD=$(AWS_PROFILE=anhnv-stg aws ssm send-command --region ap-southeast-1 --instance-ids "$PRIMARY_BASTION" \
+   CMD=$(AWS_PROFILE=anhnv-stg aws ssm send-command --no-cli-pager --region ap-southeast-1 --instance-ids "$PRIMARY_BASTION" \
      --document-name AWS-RunShellScript --parameters "commands=[\"/opt/svp-lab-dr/heartbeat.sh report $FB\"]" \
      --query Command.CommandId --output text)
    sleep 5
-   AWS_PROFILE=anhnv-stg aws ssm get-command-invocation --region ap-southeast-1 --command-id "$CMD" \
+   AWS_PROFILE=anhnv-stg aws ssm get-command-invocation --no-cli-pager --region ap-southeast-1 --command-id "$CMD" \
      --instance-id "$PRIMARY_BASTION" --query StandardOutputContent --output text
    ```
 
@@ -569,7 +569,7 @@ hay pilot light). README này không viết kết luận trước buổi.
 Xoá thư mục buổi chỉ sau khi đã chép số đo ở trên: nó giữ bản văn bản của mọi plan.
 
 ```sh
-rm -rf "$SVP_LAB_SESSION_DIR"
+rm -rf "${SVP_LAB_SESSION_DIR:?}"
 ```
 
 ## Ôn SAP-C03

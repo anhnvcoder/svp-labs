@@ -8,6 +8,7 @@
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/pg-session.sh check | endpoints | run ARGS... | start ARGS... | result ID |
 #   failover aurora|rds | events [MINUTES] | metrics lag|burst [MINUTES]
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 region=ap-southeast-1

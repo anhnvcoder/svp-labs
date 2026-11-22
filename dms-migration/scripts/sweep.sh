@@ -4,6 +4,7 @@
 # Every list should be empty; the script exits 1 when one is not or could not be read.
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/sweep.sh
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 region=ap-southeast-1

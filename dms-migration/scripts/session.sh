@@ -8,6 +8,7 @@
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/session.sh check | run ARGS... | task start|resume|status|stop | fullload |
 #   metrics [MINUTES] | cutover [LIMIT_S] | cleanup
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 region=ap-southeast-1

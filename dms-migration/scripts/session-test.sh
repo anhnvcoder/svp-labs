@@ -16,7 +16,8 @@ mkdir -p "$bin" "$state"
 failures=0
 arn=arn:aws:dms:ap-southeast-1:000000000000:task:ABCDEFGHIJKLMNOPQRSTUVWXYZ
 
-unset AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+unset SVP_AWS_STG_ACCOUNT_ID AWS_PAGER AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION \
+  AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
 export FAKE_LOG=$log FAKE_DIR=$state FAKE_ARN=$arn
 
 # The learner's machine signs in with profile anhnv-stg and names the Region on every call. The command invocation

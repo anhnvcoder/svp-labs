@@ -420,7 +420,7 @@ id: ghi lại để đọc bằng `result`.
 1. **Kiểm account** trước lệnh ghi đầu tiên.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
    ```
 
    - Mong đợi, dán lại: 12 số bằng `$SVP_AWS_STG_ACCOUNT_ID`.
@@ -486,13 +486,13 @@ id: ghi lại để đọc bằng `result`.
    ba đọc kết quả của id đó.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --no-cli-pager --region ap-southeast-1 --output text \
      --query 'InstanceInformationList[].[InstanceId,PingStatus]'
-   AWS_PROFILE=anhnv-stg aws ssm send-command --region ap-southeast-1 --document-name AWS-RunShellScript \
+   AWS_PROFILE=anhnv-stg aws ssm send-command --no-cli-pager --region ap-southeast-1 --document-name AWS-RunShellScript \
      --targets Key=tag:Name,Values=svp-lab-ds-pg-loader \
      --parameters 'commands=["command -v psql pgbench timeout dig"]' \
      --query Command.CommandId --output text
-   AWS_PROFILE=anhnv-stg aws ssm list-command-invocations --region ap-southeast-1 --details --command-id <id> \
+   AWS_PROFILE=anhnv-stg aws ssm list-command-invocations --no-cli-pager --region ap-southeast-1 --details --command-id <id> \
      --query 'CommandInvocations[].CommandPlugins[].Output' --output text
    ```
 
@@ -602,7 +602,7 @@ id: ghi lại để đọc bằng `result`.
 1. **Kiểm account** như bước 1 của phần `postgres/`, rồi chép file mẫu (`shards = 2`).
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
    cp data-scaling/valkey/valkey.auto.tfvars.example data-scaling/valkey/valkey.auto.tfvars
    ```
 
@@ -653,13 +653,13 @@ id: ghi lại để đọc bằng `result`.
 6. **Chờ SSM agent và kiểm công cụ trên loader** `svp-lab-ds-kv-loader`, như bước 7 của phần `postgres/`.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --no-cli-pager --region ap-southeast-1 --output text \
      --query 'InstanceInformationList[].[InstanceId,PingStatus]'
-   AWS_PROFILE=anhnv-stg aws ssm send-command --region ap-southeast-1 --document-name AWS-RunShellScript \
+   AWS_PROFILE=anhnv-stg aws ssm send-command --no-cli-pager --region ap-southeast-1 --document-name AWS-RunShellScript \
      --targets Key=tag:Name,Values=svp-lab-ds-kv-loader \
      --parameters 'commands=["command -v valkey-cli valkey-benchmark timeout getent"]' \
      --query Command.CommandId --output text
-   AWS_PROFILE=anhnv-stg aws ssm list-command-invocations --region ap-southeast-1 --details --command-id <id> \
+   AWS_PROFILE=anhnv-stg aws ssm list-command-invocations --no-cli-pager --region ap-southeast-1 --details --command-id <id> \
      --query 'CommandInvocations[].CommandPlugins[].Output' --output text
    ```
 
@@ -837,7 +837,7 @@ Chạy đủ năm bước trước khi kết thúc buổi, kể cả khi buổi 
    dưới dòng `LEFT` của mục log group. Xoá đúng tên in ra, rồi quét lại.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws logs delete-log-group --log-group-name '<tên log group sweep in ra>' --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws logs delete-log-group --no-cli-pager --log-group-name '<tên log group sweep in ra>' --region ap-southeast-1
    data-scaling/scripts/sweep.sh
    ```
 
@@ -852,7 +852,7 @@ Chạy đủ năm bước trước khi kết thúc buổi, kể cả khi buổi 
    rm -f data-scaling/postgres/terraform.tfstate data-scaling/postgres/terraform.tfstate.backup \
      data-scaling/postgres/*.tfplan data-scaling/valkey/terraform.tfstate \
      data-scaling/valkey/terraform.tfstate.backup data-scaling/valkey/*.tfplan
-   rm -rf "$SVP_LAB_SESSION_DIR"
+   rm -rf "${SVP_LAB_SESSION_DIR:?}"
    ```
 
    - Bẫy: sweep chưa in `sweep: nothing left` thì chưa xoá state.

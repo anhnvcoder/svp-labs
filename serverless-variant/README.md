@@ -224,7 +224,7 @@ destroy. Không đăng URL ở đâu.
   lần cho mọi profile cùng phiên:
 
   ```sh
-  AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+  AWS_PROFILE=anhnv-sso aws sso login --no-cli-pager --region us-east-1
   ```
 
 - [ ] **Biến account:** `SVP_AWS_STG_ACCOUNT_ID` (12 số của `svp-stg`) export trong terminal, không ghi vào file nào.
@@ -252,7 +252,7 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
 1. **Kiểm account** trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
    ```
 
 2. **Init.** Root không có backend (state local); `init` chỉ tải provider theo lock file. Mong đợi `Terraform has been successfully
@@ -301,7 +301,7 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
    URL=$(AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform output -raw view_url)
    VIDEO=$(uuidgen | tr '[:upper:]' '[:lower:]')
    curl -s -o /dev/null -w '%{http_code}\n' -X POST "${URL/\{id\}/$VIDEO}"
-   AWS_PROFILE=anhnv-stg aws dynamodb get-item --region ap-southeast-1 --table-name svp-lab-sls-views \
+   AWS_PROFILE=anhnv-stg aws dynamodb get-item --no-cli-pager --region ap-southeast-1 --table-name svp-lab-sls-views \
      --key "{\"pk\":{\"S\":\"video#$VIDEO\"}}" --query 'Item.views.N' --output text
    ```
 
@@ -310,8 +310,8 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
 
    ```sh
    curl -s -o /dev/null -w '%{http_code}\n' -X POST "${URL/\{id\}/not-a-uuid}"
-   AWS_PROFILE=anhnv-stg aws sqs get-queue-attributes --region ap-southeast-1 \
-     --queue-url "$(AWS_PROFILE=anhnv-stg aws sqs get-queue-url --region ap-southeast-1 \
+   AWS_PROFILE=anhnv-stg aws sqs get-queue-attributes --no-cli-pager --region ap-southeast-1 \
+     --queue-url "$(AWS_PROFILE=anhnv-stg aws sqs get-queue-url --no-cli-pager --region ap-southeast-1 \
        --queue-name svp-lab-sls-views-dlq --query QueueUrl --output text)" \
      --attribute-names ApproximateNumberOfMessages --query Attributes.ApproximateNumberOfMessages --output text
    ```
@@ -347,10 +347,10 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
     `TranscodeFailed`. Dán lại output.
 
     ```sh
-    ARN=$(AWS_PROFILE=anhnv-stg aws stepfunctions list-executions --region ap-southeast-1 --status-filter FAILED \
+    ARN=$(AWS_PROFILE=anhnv-stg aws stepfunctions list-executions --no-cli-pager --region ap-southeast-1 --status-filter FAILED \
       --state-machine-arn "arn:aws:states:ap-southeast-1:$SVP_AWS_STG_ACCOUNT_ID:stateMachine:svp-lab-sls-transcode" \
       --max-results 1 --query 'executions[0].executionArn' --output text)
-    AWS_PROFILE=anhnv-stg aws stepfunctions get-execution-history --region ap-southeast-1 --execution-arn "$ARN" \
+    AWS_PROFILE=anhnv-stg aws stepfunctions get-execution-history --no-cli-pager --region ap-southeast-1 --execution-arn "$ARN" \
       --query 'events[].type' --output text
     ```
 
@@ -394,7 +394,7 @@ Chạy đủ ba bước trước khi kết thúc buổi, kể cả khi buổi d�
    ```sh
    rm -f serverless-variant/terraform/terraform.tfstate serverless-variant/terraform/terraform.tfstate.backup \
      serverless-variant/terraform/*.tfplan serverless-variant/build/*.zip
-   rm -rf "$SVP_LAB_SESSION_DIR"
+   rm -rf "${SVP_LAB_SESSION_DIR:?}"
    ```
 
 ## Sau buổi

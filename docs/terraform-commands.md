@@ -140,6 +140,17 @@ macOS, Linux đó là khoá POSIX `fcntl` trên file state, cùng file `.terrafo
   hay dừng nó ở terminal của nó, rồi chạy lại lệnh bị chặn.
 - File `.terraform.tfstate.lock.info` còn lại sau khi tiến trình đã chết không giữ khoá; lệnh sau ghi đè nó.
 
+## Lệnh `aws` trong README
+
+AWS CLI v2 đưa output vào pager (`less`) khi chạy trên terminal: trong vòng lặp hay lệnh dán nhiều dòng, mỗi lệnh dừng ở `(END)` chờ
+phím `q`. Luật cho lệnh `aws` của lab:
+
+- **Mọi lệnh `aws` trao người học trong `.md` có `--no-cli-pager`**, cả lệnh đọc, `sso login` và `ssm start-session`.
+- **Script `scripts/*.sh` gọi `aws` đặt `export AWS_PAGER=""` đầu file**, sau `set -euo pipefail`: người học chạy script từ shell có hay
+  không có `AWS_PAGER`, output vẫn chảy thẳng ra terminal.
+- Test của script bỏ `AWS_PAGER`, `AWS_PROFILE`, `AWS_REGION` và `SVP_AWS_STG_ACCOUNT_ID` khỏi môi trường ở đầu file: kết quả không đổi
+  theo `.envrc` của máy chạy.
+
 ## Nguồn
 
 - [T1] HashiCorp, [Backend type: local](https://developer.hashicorp.com/terraform/language/backend/local): "stores state on the local

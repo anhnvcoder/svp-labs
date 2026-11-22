@@ -14,6 +14,6 @@ output "security_group_id" {
 }
 
 output "replicated_backups_arn" {
-  description = "ARN of the automated backups replicated into this Region, the source of a point-in-time restore there; null without replicate_backups_from."
+  description = "ARN of the automated backups replicated into this Region, the source of a point-in-time restore there; null unless replicate_backups is true."
   value       = one(aws_db_instance_automated_backups_replication.this[*].id)
 }

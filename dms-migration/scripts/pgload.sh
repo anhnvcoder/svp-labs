@@ -8,6 +8,7 @@
 # Usage: pgload.sh init | password | setup [VIEWS] [LIKES] | start [RATE] | stop | lag [SAMPLES] | compare |
 #   cutover TASK_ARN [LIMIT_S] | slots | drop-slots
 set -euo pipefail
+export AWS_PAGER=""
 
 conf=${SVP_DMS_CONF:-/etc/svp-lab-dms.conf}
 # shellcheck source=/dev/null

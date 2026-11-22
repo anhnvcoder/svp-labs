@@ -37,7 +37,8 @@ Mọi lệnh chạy từ gốc repo qua `Makefile`; `make help` liệt kê targe
 - `make diagrams-check`: sinh vào thư mục tạm, đỏ và nêu file khi SVG đã commit lệch `.d2`, thiếu, hay không còn `.d2` cùng tên;
   `inventory/`, `icons/` không thuộc nó. CI chạy cùng lệnh ở job `docs`.
 - `make inventory`: sinh trang `<bài>/docs/inventory.md` của năm bài SAP và sơ đồ `docs/diagrams/inventory/` từ plan của `terraform test`
-  trên provider giả (bộ sinh `scripts/inventory.sh`, mock ở `scripts/inventory/`), cần `jq`. Không sửa tay các file đó.
+  trên provider giả (bộ sinh `scripts/inventory.sh`, mock ở `scripts/inventory/`); jq chạy từ image ghim digest (`JQ_IMAGE`), cùng
+  version ở máy và CI. Không sửa tay các file đó.
 - `make inventory-check`: sinh vào thư mục tạm, đỏ và nêu file khi trang hay sơ đồ đã commit lệch, thiếu hay thừa. CI chạy cùng lệnh ở
   job `terraform` của `.github/workflows/labs.yml`.
 - `make check`: `docs-check`, `diagrams-check`, `inventory-check`, `test-guard`, `tf-check`, `go-test`, `shellcheck`, `script-test` trên

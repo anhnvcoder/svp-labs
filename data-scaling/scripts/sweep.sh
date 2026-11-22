@@ -4,6 +4,7 @@
 # Prints one line per list; writes no file. Exits 1 when a list is not empty or could not be read.
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/sweep.sh
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 region=ap-southeast-1

@@ -7,6 +7,7 @@
 # Design notes: multi-region-dr/README.md.
 # Usage: SVP_AWS_STG_ACCOUNT_ID=<id> scripts/drill.sh start | lag | crr [COUNT] | failover | cleanup | purge
 set -euo pipefail
+export AWS_PAGER=""
 
 profile=anhnv-stg
 primary_region=ap-southeast-1
