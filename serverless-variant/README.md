@@ -252,7 +252,8 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
 1. **Kiểm account** trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --no-cli-pager --query Account --output text \
+     --region ap-southeast-1
    ```
 
 2. **Init.** Root không có backend (state local); `init` chỉ tải provider theo lock file. Mong đợi `Terraform has been successfully
@@ -347,10 +348,12 @@ DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng t�
     `TranscodeFailed`. Dán lại output.
 
     ```sh
-    ARN=$(AWS_PROFILE=anhnv-stg aws stepfunctions list-executions --no-cli-pager --region ap-southeast-1 --status-filter FAILED \
+    ARN=$(AWS_PROFILE=anhnv-stg aws stepfunctions list-executions --no-cli-pager --region ap-southeast-1 \
+      --status-filter FAILED \
       --state-machine-arn "arn:aws:states:ap-southeast-1:$SVP_AWS_STG_ACCOUNT_ID:stateMachine:svp-lab-sls-transcode" \
       --max-results 1 --query 'executions[0].executionArn' --output text)
-    AWS_PROFILE=anhnv-stg aws stepfunctions get-execution-history --no-cli-pager --region ap-southeast-1 --execution-arn "$ARN" \
+    AWS_PROFILE=anhnv-stg aws stepfunctions get-execution-history --no-cli-pager --region ap-southeast-1 \
+      --execution-arn "$ARN" \
       --query 'events[].type' --output text
     ```
 
