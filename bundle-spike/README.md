@@ -1,5 +1,11 @@
 # bundle-spike: bản phát hành keyless toàn Sigstore bundle, và rescan `vuln` hằng ngày với bundle
 
+Bài hỏi: một bản phát hành keyless toàn Sigstore bundle có qua Kyverno không, và rescan `vuln` hằng ngày làm gì với bundle. Kết luận: qua
+mười phép, nhưng rescan phải gỡ bundle `vuln` cũ vì `--replace` không thay gì ở định dạng bundle ([ADR-0040][adr-0040]). Spike một lần,
+không bảo trì tiếp.
+
+[adr-0040]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md
+
 Spike một lần, trả lời trước khi đổi chữ ký, `vuln`, provenance của đường chính sang Sigstore bundle, hai câu mà
 [`attest-spike/README.md`](../attest-spike/README.md) mục "Giới hạn gặp" để "chưa kiểm":
 

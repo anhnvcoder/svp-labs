@@ -1,0 +1,178 @@
+# Overview of the lab (multi-account-networking/account, core, hybrid): the four accounts, the transit gateway of
+# svp-network that joins their VPCs, the one internet exit and the simulated site behind the VPN. How DNS and the
+# route tables work is in core.d2 and hybrid.d2.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+# An icon node: the service's official icon with its name under it, dark text on the block's pale fill in both themes.
+classes: {
+  svc: {
+    shape: image
+    width: 48
+    height: 48
+    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+  }
+}
+
+title: "Bốn account nối nhau qua Transit Gateway thế nào, và prd tách non-prd ở đâu?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 5
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  lcol: "" {
+    grid-rows: 5
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    mgmt: "management (anhnv-sso)" {
+      class: account
+      label.near: top-left
+      org: "Bật dùng chung trong org" {
+        class: governance
+        grid-rows: 4
+        grid-gap: 24
+        vertical-gap: 6
+        i: "RAM" {class: svc; icon: ../icons/ram.svg}
+        s: "Organizations: OU Infrastructure,\naccount svp-network" {class: sub}
+        t: "share RAM trong org · trusted\naccess Reachability Analyzer\n(lệnh của bước 2)" {class: sub}
+        r: "account · core" {class: root}
+      }
+    }
+    sp0: "" {height: 30; style: {stroke: transparent; fill: transparent}}
+    stg: "svp-stg" {
+      class: account
+      label.near: top-left
+      vpc: "Spoke non-prd" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "VPC · EC2" {class: svc; icon: ../icons/vpc.svg}
+        s: "svp-lab-net-stg\n10.64.32.0/20 · probe-stg" {class: sub}
+        r: "core · modules/spoke-vpc" {class: root}
+      }
+    }
+    sp: "" {height: 60; style: {stroke: transparent; fill: transparent}}
+    prd: "svp-prd" {
+      class: account
+      label.near: bottom-left
+      vpc: "Spoke prd" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "VPC · EC2" {class: svc; icon: ../icons/vpc.svg}
+        s: "svp-lab-net-prd\n10.64.48.0/20 · probe-prd" {class: sub}
+        r: "core · modules/spoke-vpc" {class: root}
+      }
+    }
+  }
+
+  g1: "" {width: 100; style: {stroke: transparent; fill: transparent}}
+
+  net: "svp-network (OU Infrastructure)" {
+    class: account
+    label.near: top-left
+    grid-rows: 3
+    grid-columns: 2
+    horizontal-gap: 80
+    vertical-gap: 90
+
+    vpn: "Đường tới on-prem" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Site-to-Site VPN" {class: svc; icon: ../icons/site-to-site-vpn.svg}
+      s: "svp-lab-net-vpn · hai tunnel\nđịnh tuyến tĩnh" {class: sub}
+      r: "hybrid · modules/site-vpn" {class: root}
+    }
+    site: "On-prem mô phỏng" {
+      class: onprem
+      label.near: top-left
+      grid-rows: 1
+      grid-columns: 1
+      grid-gap: 30
+      dc: "VPC 192.168.0.0/20" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "EC2 router · host" {class: svc; icon: ../icons/ec2.svg}
+        s: "Libreswan · BIND · EIP\nkhông gắn Transit Gateway" {class: sub}
+        r: "hybrid · modules/onprem-site" {class: root}
+      }
+    }
+    tgw: "Hub định tuyến" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Transit Gateway" {class: svc; icon: ../icons/transit-gateway.svg}
+      s: "svp-lab-net · rt-prd · rt-nonprd\n· rt-egress · route tĩnh" {class: sub}
+      t: "blackhole CIDR của env kia" {class: sub}
+      r: "core · modules/tgw-hub" {class: root}
+    }
+    egress: "Lối ra Internet chung" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "NAT Gateway · IGW" {class: svc; icon: ../icons/vpc.svg}
+      s: "VPC svp-lab-net-egress\n10.64.0.0/20 · một NAT" {class: sub}
+      r: "core · modules/egress-vpc" {class: root}
+    }
+    dns: "DNS riêng" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Route 53" {class: svc; icon: ../icons/route53.svg}
+      s: "PHZ net, nonprd.svp.example\n· Profile svp-lab-net" {class: sub}
+      t: "Profile tới stg, prd qua RAM\nzone nonprd chỉ tới stg" {class: sub}
+      r: "core · modules/dns-hub" {class: root}
+    }
+    shared: "VPC dùng chung" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "VPC" {class: svc; icon: ../icons/vpc.svg}
+      s: "svp-lab-net-shared\n10.64.16.0/20 · subnet\nworkload chia cho stg" {class: sub}
+      r: "core · modules/spoke-vpc" {class: root}
+    }
+  }
+
+  g2: "" {width: 90; style: {stroke: transparent; fill: transparent}}
+
+  rcol: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    sp: "" {height: 330; style: {stroke: transparent; fill: transparent}}
+    internet: "Internet" {
+      class: workload
+      grid-rows: 1
+      grid-gap: 24
+      s: "checkip.amazonaws.com" {class: sub}
+    }
+  }
+}
+
+all.lcol.mgmt -> all.net: "tạo account" {class: control-flow}
+all.lcol.stg.vpc -> all.net.tgw: "rt-nonprd" {class: data-flow}
+all.lcol.prd.vpc -> all.net.tgw: "rt-prd" {class: data-flow}
+all.net.shared -> all.net.tgw: "rt-nonprd" {class: data-flow}
+all.net.tgw -> all.net.egress: "0.0.0.0/0" {class: data-flow}
+all.net.egress -> all.rcol.internet: {class: data-flow}
+all.net.site -> all.net.vpn: "IPsec qua\nInternet" {class: data-flow}
+all.net.vpn -> all.net.tgw: "rt-nonprd" {class: data-flow}
+all.lcol.stg.vpc -> all.lcol.prd.vpc: "PrivateLink" {class: data-flow}

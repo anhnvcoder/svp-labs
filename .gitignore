@@ -23,6 +23,10 @@ terraform.tfvars
 terraform.tfvars.json
 backend*.hcl
 
+# Files of a learner's session (SVP_LAB_SESSION_DIR, docs/terraform-commands.md): the text of a plan holds account ids
+# and resource names, and the repository is public.
+.session/
+
 # Output of make lambda-build.
 serverless-variant/build/
 

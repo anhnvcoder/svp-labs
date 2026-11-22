@@ -77,8 +77,8 @@ variable "kms_key_arn" {
   default     = null
 
   validation {
-    condition     = var.kms_key_arn == null ? var.replicate_source_db == null && var.replicate_backups_from == null : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+$", var.kms_key_arn))
-    error_message = "kms_key_arn must be the ARN of a KMS key, and is required with replicate_source_db or replicate_backups_from."
+    condition     = var.kms_key_arn == null ? var.replicate_source_db == null && !var.replicate_backups : can(regex("^arn:aws[a-z-]*:kms:[a-z0-9-]+:[0-9]{12}:key/.+$", var.kms_key_arn))
+    error_message = "kms_key_arn must be the ARN of a KMS key, and is required with replicate_source_db or replicate_backups."
   }
 }
 
@@ -133,14 +133,25 @@ variable "backup_retention_period" {
   }
 }
 
+variable "replicate_backups" {
+  description = "Whether RDS replicates the automated backups of replicate_backups_from into this Region. A plan-time switch: count cannot use the ARN, which is unknown until the source exists."
+  type        = bool
+  default     = false
+}
+
 variable "replicate_backups_from" {
-  description = "ARN of an instance in another Region whose automated backups RDS replicates into this Region (the backup and restore path); null replicates nothing."
+  description = "ARN of an instance in another Region whose automated backups RDS replicates into this Region (the backup and restore path); read only with replicate_backups."
   type        = string
   default     = null
 
   validation {
     condition     = var.replicate_backups_from == null || can(regex("^arn:aws[a-z-]*:rds:[a-z0-9-]+:[0-9]{12}:db:[a-z0-9-]+$", var.replicate_backups_from))
     error_message = "replicate_backups_from must be the ARN of a DB instance."
+  }
+
+  validation {
+    condition     = !var.replicate_backups || var.replicate_backups_from != null
+    error_message = "replicate_backups_from must be set when replicate_backups is true."
   }
 }
 

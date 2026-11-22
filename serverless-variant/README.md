@@ -4,6 +4,13 @@ Bài dựng lại hai luồng của svp bằng dịch vụ managed, không clust
 DynamoDB; điều phối transcode bằng S3, EventBridge và Step Functions. Bài đo độ trễ, chống đếm trùng, đường thất bại và
 chi phí mỗi triệu event, rồi so với đường EKS của svp ở [`docs/eks-vs-serverless.md`](docs/eks-vs-serverless.md).
 
+| | |
+| --- | --- |
+| Dựng | Một root ở `svp-stg`, `ap-southeast-1`, không VPC: API Gateway → SQS → Lambda → DynamoDB; S3 → EventBridge → Step Functions |
+| Trả lời | Hai luồng của svp làm serverless thì được, mất gì: độ trễ, đếm đúng một lần, đường lỗi, chi phí mỗi triệu event so với EKS |
+| Phí | Theo lượng dùng, không theo giờ dựng: trần ~1,4 USD mỗi giờ khi endpoint bị gọi liên tục; ~0,2 USD mỗi buổi ([Chi phí](#chi-phí)) |
+| Thời gian | Ước tính, chưa đo: dựng ~10 phút, đo ~50 phút, gỡ và quét ~10 phút; ~70 phút, trong buổi 2 giờ ([Chạy buổi](#chạy-buổi)) |
+
 ## Câu hỏi
 
 - svp chạy engagement trên EKS: lượt xem đi Kafka, consumer gom lô 5.000 record hay 1 s rồi ghi Postgres một
@@ -18,36 +25,13 @@ chi phí mỗi triệu event, rồi so với đường EKS của svp ở [`docs/
 
 ## Thiết kế
 
-```mermaid
-flowchart LR
-    client["Client, k6"]
-    subgraph aps1["ap-southeast-1, account svp-stg, không VPC"]
-        api["REST API svp-lab-sls-views<br/>stage lab, throttle 50 rps, burst 100"]
-        q["SQS svp-lab-sls-views<br/>giữ 1 ngày"]
-        dlq["SQS svp-lab-sls-views-dlq<br/>giữ 14 ngày"]
-        counter["Lambda svp-lab-sls-counter<br/>Go, arm64, provided.al2023"]
-        table[("DynamoDB svp-lab-sls-views<br/>on-demand, TTL expires_at")]
-        cw["CloudWatch metric<br/>svp-lab-sls / EndToEndLatencyMs, DuplicatesSkipped"]
-        bucket["S3 svp-lab-sls-uploads-ACCOUNT-ap-southeast-1"]
-        default["EventBridge bus default<br/>rule svp-lab-sls-upload-created"]
-        sfn["Step Functions Standard<br/>svp-lab-sls-transcode"]
-        tx["Lambda svp-lab-sls-transcode"]
-        bus["EventBridge bus svp-lab-sls<br/>rule svp-lab-sls-transcode-events"]
-        logs["CloudWatch Logs<br/>/aws/events/svp-lab-sls-transcode"]
-    end
-    client -- "POST /videos/{id}/views" --> api
-    api -- "SendMessage, role svp-lab-sls-views-api" --> q
-    q -- "lô 100 hay 1 s" --> counter
-    q -- "nhận 5 lần không xong" --> dlq
-    counter -- "TransactWriteItems" --> table
-    counter -. "dòng EMF" .-> cw
-    client -- "PUT uploads/ID.mp4" --> bucket
-    bucket -- "Object Created" --> default
-    default -- "StartExecution" --> sfn
-    sfn -- "Invoke" --> tx
-    sfn -- "PutEvents transcode.completed / failed" --> bus
-    bus --> logs
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/serverless-variant/overview-dark.svg">
+  <img src="../docs/diagrams/serverless-variant/overview.svg" alt="Một lượt xem và một upload đi qua những dịch vụ nào?">
+</picture>
+
+Hai hàng trên là luồng ghi lượt xem, hai hàng dưới là luồng transcode; mỗi khối là một tài nguyên của root, đúng tên trong Terraform.
+Nguồn sơ đồ: [`overview.d2`](../docs/diagrams/serverless-variant/overview.d2).
 
 Hợp đồng giữa Terraform và Go (tên biến, bảng, khoá, attribute, lỗi, metric) là một: Terraform đặt `TABLE_NAME`,
 `DEDUPE_TTL_SECONDS`, tên bảng và hàng đợi; code đọc chúng ở [`functions/`](functions/).
@@ -158,8 +142,18 @@ sequenceDiagram
 | Độ trễ đầu-cuối | `EndToEndLatencyMs`: từ `SentTimestamp` của message tới lúc `counter` ghi xong, một dòng EMF mỗi lượt được cộng [N23] | `measure.sh e2e 15` (p50, p95, p99 của metric trong 15 phút) | Khoảng cửa sổ gom 1 s cộng thời gian ghi; svp chấp nhận số lượt xem trễ tối đa ~1 phút ([architecture §2](https://github.com/anhnvcoder/svp-backend/blob/main/docs/architecture.md#2-ràng-buộc-và-yêu-cầu-phi-chức-năng)) |
 | Lượt trùng bị bỏ | Gửi hai lần cùng body, cùng `event_id` thẳng vào hàng đợi, như SQS giao lại | `measure.sh duplicate`: chờ riêng hai message vừa gửi, tới khi `views` của video là 1 và log của `counter` ghi một trong hai là `duplicate view skipped`; hạn chờ cộng một visibility timeout cho bản bị xung đột transaction rồi giao lại | `views` của video bằng 1; `DuplicatesSkipped` tăng 1 |
 | Đường thất bại của state machine | Upload `uploads/<uuid>.txt` (đuôi sai) cạnh `uploads/<uuid>.mp4` | `measure.sh transcode` | `.mp4`: `transcode.completed`; `.txt`: `transcode.failed` mang `errorMessage`, execution `FAILED`, task `Transcode` chạy một lần (không `Retry`) |
-| Id sai dạng | `POST /videos/not-a-uuid/views` | Bước 5 của Chạy buổi | 202; hết visibility timeout của lần nhận thứ 5 (khoảng 5 × 181 s ≈ 15 phút) message nằm ở DLQ [N10] |
+| Id sai dạng | `POST /videos/not-a-uuid/views` | Bước 7 của [Chạy buổi](#chạy-buổi) | 202; sau 5 lần nhận (~5 × 181 s) ở DLQ [N10] |
 | Chi phí mỗi triệu event | Tổng (lượng dùng × đơn giá) chia số lượt đếm, lượng dùng lấy từ CloudWatch trong cửa sổ đo | `measure.sh e2e` in số request API, invocation và thời lượng trung bình của Lambda, message SQS, nhận rỗng, WRU của DynamoDB; tính theo bảng ở mục Chi phí | Gần ước tính ~7,8 USD (mục Chi phí); lệch nhiều thì tìm khoản lệch |
+
+## Tài nguyên
+
+Bài có một root. Số tài nguyên, chia theo phần và theo loại, ở trang [inventory](docs/inventory.md) (sinh từ plan trên provider giả).
+
+| Root | Việc | Inventory |
+| --- | --- | --- |
+| `serverless-variant/terraform` | Cả hai luồng: API, hàng đợi, DLQ, hai hàm, bảng, bucket, state machine, bus | [mục của root][inv-root] |
+
+[inv-root]: docs/inventory.md#serverless-variantterraform
 
 ## Chi phí
 
@@ -220,49 +214,99 @@ Mỗi buổi 2 giờ (ba lượt k6 tới 20 request/s × 5 phút và các phép
 Rủi ro: endpoint không xác thực, ai có URL đều gọi được trong lúc buổi chạy; trần ~1,4 USD mỗi giờ ở trên, hết khi
 destroy. Không đăng URL ở đâu.
 
+## Điều kiện trước
+
+- [ ] **Trên máy:** AWS CLI v2, `jq`, Docker (k6 chạy từ image ghim digest), Go theo `functions/go.mod`, Terraform 1.15, `curl`,
+  `uuidgen`.
+- [ ] **Mã nguồn:** gốc repo `svp-labs` trên `main`, sau khi PR của bài đã merge. Mọi lệnh dưới đây chạy từ gốc repo.
+- [ ] **Profile** `anhnv-stg` (account `svp-stg`) đã ghi như trang
+  [thiết lập account của `svp-infra`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/accounts-setup.md); đăng nhập SSO một
+  lần cho mọi profile cùng phiên:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+  ```
+
+- [ ] **Biến account:** `SVP_AWS_STG_ACCOUNT_ID` (12 số của `svp-stg`) export trong terminal, không ghi vào file nào.
+- [ ] **Thư mục buổi** ([`terraform-commands.md`](../docs/terraform-commands.md#thư-mục-buổi)):
+
+  ```sh
+  export SVP_LAB_SESSION_DIR="$PWD/.session/serverless-variant-$(date -u +%Y%m%dT%H%M%SZ)" && mkdir -p "$SVP_LAB_SESSION_DIR"
+  ```
+
+- [ ] **Build hai hàm trước `plan`.** `archive_file` của root đọc `build/<tên>/bootstrap` ngay lúc `plan`, nên thiếu bước này thì
+  plan dừng ở lỗi đọc file. Mong đợi hai dòng `lambda-build counter`, `lambda-build transcode`; dán lại cả hai.
+
+  ```sh
+  make lambda-build
+  ```
+
+- [ ] **Lab chạy trước:** không cần. Bài không dùng VPC hay tài nguyên của lab khác.
+
 ## Chạy buổi
 
-Máy người học cần AWS CLI v2, `jq`, Docker, Go, Terraform 1.15; chạy từ gốc repo `svp-labs`, sau khi PR của bài đã
-merge, trên `main`. Biến `SVP_AWS_STG_ACCOUNT_ID` (12 số của account `svp-stg`) export trong terminal, không ghi vào
-file nào. Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
+Lệnh `terraform` theo khuôn của [`docs/terraform-commands.md`](../docs/terraform-commands.md) (lý do từng phần ở đó). Buổi chạy trong
+account `svp-stg` bằng profile `anhnv-stg`. Thời gian ở tóm tắt là ước tính từ các lần chờ trong bước: k6 5 phút, chờ metric 5 phút,
+DLQ ít nhất 15 phút (chạy song song các bước 8–12), thử trùng tối đa 180 s cộng một visibility timeout 181 s.
 
-1. Kiểm account trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
+1. **Kiểm account** trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
 
    ```sh
    AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
    ```
 
-2. Build hai hàm. `archive_file` của root đọc `build/<tên>/bootstrap` ngay lúc `plan`, nên bước này chạy trước. Dán lại
-   hai dòng `lambda-build`.
+2. **Init.** Root không có backend (state local); `init` chỉ tải provider theo lock file. Mong đợi `Terraform has been successfully
+   initialized!`.
 
    ```sh
-   make lambda-build
+   AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform init -input=false
    ```
 
-3. Dựng hạ tầng. `init` không có backend (state local); `plan` ghi file `tfplan` (không commit). Dán lại dòng `Plan:` và
-   `Apply complete`.
+3. **Plan** ra file, rồi bản văn bản vào thư mục buổi.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=serverless-variant/terraform init
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=serverless-variant/terraform \
-     plan -out=tfplan
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=serverless-variant/terraform \
-     apply tfplan
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=serverless-variant/terraform plan -input=false -out=serverless-variant.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform show -no-color serverless-variant.tfplan \
+     > "$SVP_LAB_SESSION_DIR/serverless-variant-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/serverless-variant-plan.txt"
    ```
 
-4. Lấy URL và gửi một lượt xem. Lệnh `curl` phải in `202`; sau vài giây `get-item` in `1`.
+   - **Mong đợi:** mọi dòng `will be created`; dòng `Plan:` bằng dòng của root ở [trang inventory][inv-root]. Account thật không đổi số:
+     inventory dùng id giả cùng dạng.
+   - **Dán lại** dòng `Plan:`.
+   - **Bẫy:** lỗi của `data.archive_file` nhắc tới `build/<tên>/bootstrap` là chưa `make lambda-build` (mục Điều kiện trước).
+     `No value for required variable` là thiếu `SVP_AWS_STG_ACCOUNT_ID` trong terminal.
+
+4. **Apply** đúng file plan đã đọc. Mong đợi `Apply complete!`; dán lại dòng đó.
 
    ```sh
-   URL=$(AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=serverless-variant/terraform \
-     output -raw view_url)
+   AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform apply -input=false serverless-variant.tfplan \
+     && rm serverless-variant/terraform/serverless-variant.tfplan
+   ```
+
+5. **Plan lại**, không `-out`. Mong đợi `No changes. Your infrastructure matches the configuration.`; dòng đổi nào còn lại là lỗi code:
+   dừng, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=serverless-variant/terraform plan -input=false
+   ```
+
+6. **Lấy URL và gửi một lượt xem.** Lệnh `curl` phải in `202`; sau vài giây `get-item` in `1`. Không đăng URL ở đâu (mục Chi phí).
+
+   ```sh
+   URL=$(AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform output -raw view_url)
    VIDEO=$(uuidgen | tr '[:upper:]' '[:lower:]')
    curl -s -o /dev/null -w '%{http_code}\n' -X POST "${URL/\{id\}/$VIDEO}"
    AWS_PROFILE=anhnv-stg aws dynamodb get-item --region ap-southeast-1 --table-name svp-lab-sls-views \
      --key "{\"pk\":{\"S\":\"video#$VIDEO\"}}" --query 'Item.views.N' --output text
    ```
 
-5. Gửi một id sai dạng; nó đi hết 5 lần nhận trong khi các bước sau chạy. `curl` in `202`. Sau ít nhất 15 phút, lệnh
-   thứ hai in `1` (một message ở DLQ); dán lại cả hai.
+7. **Id sai dạng.** Gửi một id sai dạng; nó đi hết 5 lần nhận trong khi các bước sau chạy. `curl` in `202`. Chạy lệnh thứ hai sau ít
+   nhất 15 phút (sau bước 12 là vừa): nó in `1` (một message ở DLQ). Dán lại cả hai.
 
    ```sh
    curl -s -o /dev/null -w '%{http_code}\n' -X POST "${URL/\{id\}/not-a-uuid}"
@@ -272,35 +316,35 @@ file nào. Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
      --attribute-names ApproximateNumberOfMessages --query Attributes.ApproximateNumberOfMessages --output text
    ```
 
-6. Đo độ trễ API. Dán lại các dòng `api latency`, `requests`.
+8. **Độ trễ API.** k6 20 request/s trong 5 phút. Dán lại các dòng `api latency`, `requests`.
 
    ```sh
    serverless-variant/scripts/measure.sh load "$URL" 20 5m
    ```
 
-7. Chờ 5 phút sau lượt k6, đọc độ trễ đầu-cuối và lượng dùng. Dán lại toàn bộ output; tìm `end-to-end latency`, rồi
-   các dòng đếm dùng cho chi phí mỗi triệu event.
+9. **Độ trễ đầu-cuối và lượng dùng.** Chờ 5 phút sau lượt k6 rồi chạy. Dán lại toàn bộ output; tìm `end-to-end latency`, rồi các dòng
+   đếm dùng cho chi phí mỗi triệu event.
 
    ```sh
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID serverless-variant/scripts/measure.sh e2e 15
    ```
 
-8. Thử lượt trùng. Dán lại dòng `views of video ...: 1 (expected 1), message ... skipped as a duplicate`. Dòng
-   `counted 2 times` nghĩa là cùng `event_id` bị đếm hai lần; dòng `no outcome after` nghĩa là chưa thấy kết quả của
-   hai message trong hạn chờ, không phải đếm trùng: đọc log group `/aws/lambda/svp-lab-sls-counter`.
+10. **Lượt trùng.** Dán lại dòng `views of video ...: 1 (expected 1), message ... skipped as a duplicate`. Dòng `counted 2 times`
+    nghĩa là cùng `event_id` bị đếm hai lần; dòng `no outcome after` nghĩa là chưa thấy kết quả của hai message trong hạn chờ, không
+    phải đếm trùng: đọc log group `/aws/lambda/svp-lab-sls-counter`.
 
-   ```sh
-   SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID serverless-variant/scripts/measure.sh duplicate
-   ```
+    ```sh
+    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID serverless-variant/scripts/measure.sh duplicate
+    ```
 
-9. Thử hai đường của state machine. Dán lại hai dòng `uploads/...: transcode.completed`, `transcode.failed (...)`.
+11. **Hai đường của state machine.** Dán lại hai dòng `uploads/...: transcode.completed`, `transcode.failed (...)`.
 
-   ```sh
-   SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID serverless-variant/scripts/measure.sh transcode
-   ```
+    ```sh
+    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID serverless-variant/scripts/measure.sh transcode
+    ```
 
-10. Xem lịch sử execution lỗi: task `Transcode` chỉ một lần `TaskFailed` (không thử lại `InvalidInput`), execution
-    `FAILED` với lỗi `TranscodeFailed`. Dán lại output.
+12. **Lịch sử execution lỗi.** Task `Transcode` chỉ một lần `TaskFailed` (không thử lại `InvalidInput`), execution `FAILED` với lỗi
+    `TranscodeFailed`. Dán lại output.
 
     ```sh
     ARN=$(AWS_PROFILE=anhnv-stg aws stepfunctions list-executions --region ap-southeast-1 --status-filter FAILED \
@@ -312,37 +356,199 @@ file nào. Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
 
 ## Dọn dẹp
 
-Chạy đủ hai bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng.
+Chạy đủ ba bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng (bước 4 lỗi giữa chừng: mục
+[Khi apply lỗi giữa chừng](../docs/terraform-commands.md#khi-apply-lỗi-giữa-chừng)).
 
-1. Destroy root. Bucket xoá cả object (`force_destroy`), log group xoá theo. Dán lại dòng `Destroy complete`.
+1. **Plan gỡ**, đọc, rồi apply đúng file đó. Bucket xoá cả object (`force_destroy`), log group xoá theo.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=serverless-variant/terraform destroy
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=serverless-variant/terraform plan -destroy -input=false -out=serverless-variant-destroy.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform show -no-color serverless-variant-destroy.tfplan \
+     > "$SVP_LAB_SESSION_DIR/serverless-variant-destroy-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/serverless-variant-destroy-plan.txt"
    ```
 
-2. Quét sót. Mong đợi mọi dòng `none` và `sweep: nothing left`; có dòng `LEFT` thì xoá thứ đó rồi quét lại. Sau đó xoá
-   state local (giữ account ID, ARN, URL) và file zip của build.
+   Đọc `serverless-variant-destroy-plan.txt` trong thư mục buổi; đúng như mong đợi (dưới) thì sang khối sau, apply đúng file plan đã đọc:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=serverless-variant/terraform apply -input=false serverless-variant-destroy.tfplan \
+     && rm serverless-variant/terraform/serverless-variant-destroy.tfplan
+   ```
+
+   - **Mong đợi:** `Plan: 0 to add, 0 to change, N to destroy.`, N bằng số `to add` ở [trang inventory][inv-root]; rồi `Destroy
+     complete!`.
+   - **Dán lại** dòng `Plan:` và dòng `Destroy complete!`.
+
+2. **Quét sót**, chỉ đọc, profile và region nằm trong script. Mong đợi mọi dòng `none` và `sweep: nothing left`; có dòng `LEFT` thì
+   xoá thứ đó rồi quét lại; dòng `ERROR` thường là phiên SSO hết hạn: đăng nhập lại rồi quét lại. Dán lại toàn bộ output.
 
    ```sh
    serverless-variant/scripts/sweep.sh
-   rm -f serverless-variant/terraform/terraform.tfstate serverless-variant/terraform/terraform.tfstate.backup \
-     serverless-variant/terraform/tfplan serverless-variant/build/*.zip
    ```
 
-## Đề SAP
+3. **Xoá file của buổi** khi sweep sạch và số đo đã ghi (mục Sau buổi): state local, file plan còn sót, zip của build (chúng giữ
+   account ID, ARN, URL), rồi thư mục buổi.
 
-Theo exam guide SAP-C02 [N33]:
+   ```sh
+   rm -f serverless-variant/terraform/terraform.tfstate serverless-variant/terraform/terraform.tfstate.backup \
+     serverless-variant/terraform/*.tfplan serverless-variant/build/*.zip
+   rm -rf "$SVP_LAB_SESSION_DIR"
+   ```
 
-- 2.1 Design a deployment strategy to meet business requirements: Lambda đóng gói bằng IaC, đổi code theo hash.
-- 2.3 Determine security controls based on requirements: role tối thiểu mỗi thành phần, điều kiện
-  `dynamodb:EnclosingOperation`, resource policy của CloudWatch Logs, endpoint công khai có throttle.
-- 2.4 Design a strategy to meet reliability requirements: SQS, DLQ, partial batch response, `Retry`, `Catch` của Step
-  Functions, đúng một lần trên hàng đợi giao ít nhất một lần.
-- 2.5 Design a solution to meet performance objectives: độ trễ API, gom lô, giới hạn ghi một mục DynamoDB.
-- 2.6 Determine a cost optimization strategy to meet solution goals and objectives: chi phí mỗi triệu event, REST so
-  với HTTP API, điểm hoà vốn với EKS.
-- 4.3 Determine a new architecture for existing workloads và 4.4 Determine opportunities for modernization and
-  enhancements: đưa engagement, điều phối transcode của svp sang serverless và kết luận được, mất.
+## Sau buổi
+
+Không viết kết luận vào trang này trước buổi. Sau buổi:
+
+- **Số đo cần ghi**, kèm mốc UTC mà `measure.sh` in: p50, p95, p99 của độ trễ API (bước 8) và đầu-cuối (bước 9); kết quả lượt trùng
+  (bước 10), hai đường transcode (bước 11, 12), message ở DLQ (bước 7); lượng dùng của bước 9 nhân đơn giá ở mục Chi phí thành chi phí
+  mỗi triệu event đo được, so với ước tính ~7,8 USD.
+- **Trang so sánh:** thay số ước tính của [`docs/eks-vs-serverless.md`](docs/eks-vs-serverless.md) bằng số đo.
+- **ADR mới ở `svp-backend`** nhận kết luận (giữ đường EKS hay chuyển luồng nào sang serverless, `$context.requestId` hay
+  `$context.extendedRequestId`); README này thêm mục kết luận trỏ tới ADR đó.
+
+## Ôn SAP-C03
+
+Task statement của exam guide SAP-C03 [N33] mà bài phục vụ:
+
+- 1.1 Design architectures built for the cloud: SQS standard với idempotency ở bên nhận, state ngoài ở DynamoDB, workflow bền bằng
+  Step Functions, cửa vào API Gateway, Lambda scale theo hàng đợi.
+- 1.5 Design data, storage, and database architectures: chọn DynamoDB theo kiểu truy cập, giới hạn ghi của một partition.
+- 2.1 Design identity security architectures: role tối thiểu mỗi thành phần, điều kiện `dynamodb:EnclosingOperation`.
+- 3.1 Design architectures based on AWS pricing models: REST so với HTTP API, Step Functions Standard so với Express, Lambda arm64.
+- 3.4 Optimize storage and database costs: DynamoDB on-demand, TTL không tốn write, log giữ 1 ngày.
+- 5.3 Design observability and monitoring solutions: metric bằng EMF từ log của Lambda.
+- 5.4 Design operational automation and resilient systems: DLQ, partial batch response, `Retry` có backoff, `Catch`.
+
+### 1. Đếm đúng một lần trên hàng đợi giao ít nhất một lần (task 1.1)
+
+Một ứng dụng nhận lượt xem qua SQS standard, Lambda đọc theo lô và cộng vào bộ đếm. Thỉnh thoảng một message được giao hai lần và
+lượt xem bị cộng hai lần. Yêu cầu: không đếm trùng, giữ thông lượng cao, ít thay đổi nhất.
+
+- A. Chuyển sang SQS FIFO với deduplication theo nội dung.
+- B. Mỗi message mang id; Lambda ghi trong một `TransactWriteItems`: put mục `event#<id>` có điều kiện chưa tồn tại, cùng cộng bộ đếm.
+- C. Tăng visibility timeout lên 12 giờ để message không bị giao lại.
+- D. Đặt `maxReceiveCount` bằng 1 để message lỗi sang DLQ ngay.
+
+**Đáp án:** B. Standard queue giao ít nhất một lần [N9]; chống trùng phải nằm ở bên nhận. Transaction gộp phép kiểm id và phép cộng
+thành một: lượt giao lại huỷ cả transaction, không cộng [N21].
+
+**Vì sao không phải:**
+
+- A: FIFO chỉ bỏ trùng lúc gửi, trong cửa sổ 5 phút [N34]; Lambda ghi xong mà xoá message không thành thì message vẫn được giao lại.
+- C: visibility timeout dài chỉ hoãn lần giao lại, không bỏ được trùng, và làm message lỗi chờ lâu.
+- D: mất lượt xem hợp lệ gặp lỗi tạm thời; không chống trùng.
+
+**Trong lab:** bước 10 của [Chạy buổi](#chạy-buổi) gửi cùng `event_id` hai lần thẳng vào hàng đợi; `views` phải là 1.
+
+### 2. Cửa vào ghi vào hàng đợi, không Lambda (task 3.1)
+
+Một endpoint công khai nhận POST và chỉ cần đẩy body vào SQS. Yêu cầu: không code ở đường vào, giới hạn tốc độ để chặn chi phí khi
+bị gọi tràn, chặn được request có body sai dạng trước khi vào hàng đợi.
+
+- A. HTTP API với integration `SQS-SendMessage`.
+- B. REST API, request validator kiểm body theo model JSON Schema, integration AWS tới `SendMessage` bằng mapping
+  template, throttle ở stage.
+- C. Application Load Balancer với target là Lambda gửi SQS.
+- D. REST API, Lambda proxy integration gửi SQS.
+
+**Đáp án:** B. Chỉ REST API có request validation [N7]: body không khớp model bị trả 400 trước integration, không tới
+hàng đợi [N36]. Mapping template dựng form `SendMessage` không cần code [N1], [N3]; throttle của stage giới hạn tốc độ [N5].
+
+**Vì sao không phải:**
+
+- A: rẻ hơn (1,25 so với 4,25 USD mỗi triệu request [P1]), throttle được theo stage, route [N37] và gửi SQS không code [N8],
+  nhưng không có request validation [N7]: body sai dạng vẫn vào hàng đợi. HTTP API cũng không giới hạn theo client, không
+  biến đổi body [N7].
+- C: thêm Lambda ở đường vào, trái yêu cầu không code; ALB tính theo giờ dù không có tải.
+- D: thêm Lambda ở đường vào, trả thêm tiền mỗi request và phải viết, vận hành code.
+
+**Trong lab:** module `view-ingest` không bật request validator: body của message do template dựng từ id trên path, nên
+id sai dạng vẫn vào SQS rồi sang DLQ (bước 7 của [Chạy buổi](#chạy-buổi)); lab chỉ trả 415 cho request có `Content-Type`
+không có template [N4]. Trần chi phí mỗi giờ ở [Chi phí](#chi-phí), so REST với HTTP API ở đó.
+
+### 3. Điều phối transcode: Standard hay Express (task 1.1, 3.1)
+
+Mỗi upload chạy một workflow ba bước: gọi Lambda kiểm file, gọi transcode, phát event kết quả. Bước transcode không idempotent; công ty
+cần xem lại lịch sử từng lần chạy khi có khiếu nại. Lượng: vài nghìn upload mỗi ngày.
+
+- A. Step Functions Express, log execution ra CloudWatch Logs.
+- B. Step Functions Standard với `Retry` cho lỗi tạm thời của Lambda, `Catch` phát event lỗi.
+- C. Chuỗi Lambda gọi nhau bất đồng bộ, lỗi vào DLQ của Lambda.
+- D. SQS giữa mỗi bước, mỗi bước một Lambda.
+
+**Đáp án:** B. Standard chạy mỗi bước đúng một lần trừ khi có `Retry`, giữ lịch sử 90 ngày; hợp với việc không idempotent [N25].
+
+**Vì sao không phải:**
+
+- A: Express chạy ít nhất một lần, tối đa 5 phút [N25]: bước không idempotent có thể chạy hai lần.
+- C: không có lịch sử tập trung, lỗi rải ở nhiều DLQ, tự viết retry.
+- D: tự xây điều phối, không có trạng thái của cả workflow.
+
+**Trong lab:** module `transcode-flow`; bước 11, 12 thấy task `Transcode` không chạy lại khi `InvalidInput`.
+
+### 4. Message lỗi trong lô SQS (task 5.4)
+
+Lambda đọc SQS theo lô 100. Một record sai dạng làm cả lô lỗi, 99 record tốt bị xử lý lại nhiều lần rồi cùng vào DLQ. Yêu cầu: chỉ
+record lỗi quay lại hàng đợi, record hỏng cuối cùng nằm ở DLQ để xem.
+
+- A. Bật `ReportBatchItemFailures`, trả `batchItemFailures` cho record lỗi; DLQ với `maxReceiveCount` 5, giữ lâu hơn hàng đợi gốc.
+- B. Giảm lô xuống 1.
+- C. Bắt mọi lỗi trong Lambda rồi trả thành công.
+- D. Bật Lambda destination khi lỗi cho event source mapping SQS.
+
+**Đáp án:** A. Partial batch response chỉ trả record lỗi về hàng đợi [N13]; DLQ giữ thời điểm vào hàng đợi gốc nên phải giữ lâu hơn
+[N10]; 5 lần nhận là mức AWS khuyên [N12].
+
+**Vì sao không phải:**
+
+- B: đúng nhưng số invocation gấp 100 lần, chi phí và độ trễ tăng.
+- C: mất record lỗi, không ai biết.
+- D: với SQS, message lỗi đi DLQ đặt ở redrive policy của hàng đợi nguồn [N12], không qua cấu hình phía Lambda.
+
+**Trong lab:** bước 7 gửi id sai dạng; sau 5 lần nhận nó nằm ở `svp-lab-sls-views-dlq`.
+
+### 5. Bộ đếm nóng trên DynamoDB (task 1.5)
+
+Video lan truyền nhận 5.000 lượt xem mỗi giây; mỗi lượt cộng thẳng vào một mục `video#<id>`. Bảng on-demand còn xa trần của bảng nhưng
+ghi vào mục đó bị throttle.
+
+- A. Chuyển bảng sang provisioned 10.000 WCU.
+- B. Gom lượt xem theo lô rồi cộng một lần mỗi video, hay chia bộ đếm thành nhiều mục (write sharding) và cộng lại lúc đọc.
+- C. Thêm DAX trước bảng.
+- D. Thêm global secondary index trên `video_id`.
+
+**Đáp án:** B. Một partition tối đa 1.000 WCU mỗi giây [N22], [N35]; tải dồn vào một khoá thì throttle dù bảng còn dư. Gom lô hay
+sharding chia ghi ra nhiều lần ít hơn hay nhiều khoá [N35].
+
+**Vì sao không phải:**
+
+- A: capacity của bảng không nâng trần của một partition.
+- C: DAX là cache đọc, không giảm ghi.
+- D: index thêm ghi, không chia tải của khoá gốc.
+
+**Trong lab:** bài cộng từng lượt (hai write có transaction mỗi lượt, mục Chi phí); svp gom lô như phương án B. So ở
+[`docs/eks-vs-serverless.md`](docs/eks-vs-serverless.md).
+
+### 6. Quyền tối thiểu cho hàm ghi có transaction (task 2.1)
+
+Hàm Lambda chỉ được ghi bảng bằng `TransactWriteItems` (put mục chống trùng cùng cập nhật bộ đếm), không bao giờ ghi lẻ một mục.
+
+- A. Cho `dynamodb:TransactWriteItems` trên bảng.
+- B. Cho `dynamodb:PutItem`, `dynamodb:UpdateItem` trên bảng, điều kiện `dynamodb:EnclosingOperation` = `TransactWriteItems`.
+- C. Policy AWS managed `AmazonDynamoDBFullAccess`.
+- D. Cho `dynamodb:*` trên bảng, permissions boundary chặn `DeleteItem`.
+
+**Đáp án:** B. Quyền của `Put`, `Update` trong transaction là quyền `PutItem`, `UpdateItem`; điều kiện
+`dynamodb:EnclosingOperation` chỉ cho chúng khi nằm trong transaction [N21].
+
+**Vì sao không phải:**
+
+- A: không cấp `PutItem`, `UpdateItem`, quyền mà các thao tác trong transaction cần [N21]: hàm không ghi được.
+- C, D: rộng hơn cần; vẫn ghi lẻ được.
+
+**Trong lab:** statement `CountInTransactions` của module `counter` ở `terraform/main.tf`; mục Thiết kế, ý "IAM tối thiểu".
 
 ## Kiểm offline
 
@@ -354,6 +560,7 @@ make go-test lambda-build DIRS=serverless-variant
 make shellcheck DIRS=serverless-variant
 bash serverless-variant/scripts/measure-test.sh
 make docs-check DOCS='serverless-variant/**/*.md'
+make diagrams-check NAMES=serverless-variant
 make lock DIRS=serverless-variant  # only when the root changes its providers
 ```
 
@@ -367,6 +574,8 @@ make lock DIRS=serverless-variant  # only when the root changes its providers
 - `modules/transcode-flow/`: bucket upload, rule `Object Created`, state machine và role, bus `svp-lab-sls`, rule chép
   sự kiện vào CloudWatch Logs.
 - `functions/`: code Go của `counter`, `transcode`.
+- [`docs/inventory.md`](docs/inventory.md): tài nguyên root tạo trên account trống, sinh bằng `make inventory`.
+- `../docs/diagrams/serverless-variant/overview.d2`: sơ đồ của mục Thiết kế, sinh SVG bằng `make diagrams`.
 - `scripts/measure.sh`: `load`, `e2e`, `duplicate`, `transcode` trên máy người học; `scripts/measure-test.sh`.
 - `scripts/sweep.sh`: quét sót, chỉ đọc.
 - Tên và tag mà script tra cứu: tag `Lab = serverless-variant`, tiền tố `svp-lab-sls-`; API `svp-lab-sls-views` stage
@@ -437,8 +646,18 @@ Tài liệu AWS đọc 2026-11-17.
 - [N31] EventBridge, Using resource-based policies (CloudWatch Logs):
   <https://docs.aws.amazon.com/eventbridge/latest/userguide/eb-use-resource-based.html>
 - [N32] AWS Lambda, Using Lambda with Kinesis Data Streams: <https://docs.aws.amazon.com/lambda/latest/dg/with-kinesis.html>
-- [N33] AWS Certified Solutions Architect - Professional (SAP-C02) exam guide:
-  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.html>
+- [N33] AWS Certified Solutions Architect - Professional (SAP-C03) exam guide:
+  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-03/solutions-architect-professional-03.html>
+- [N34] Amazon SQS, Exactly-once processing (FIFO, cửa sổ chống trùng 5 phút):
+  <https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/FIFO-queues-exactly-once-processing.html>
+- [N35] Amazon DynamoDB, Best practices for partition keys (mỗi partition tối đa 1.000 write unit mỗi giây) và Data modeling
+  building blocks (write sharding):
+  <https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/bp-partition-key-design.html>,
+  <https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/data-modeling-blocks.html>
+- [N36] API Gateway, Request validation for REST APIs (lỗi 400 trước integration request, model JSON Schema):
+  <https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-method-request-validation.html>
+- [N37] API Gateway, Throttle requests to your HTTP APIs (theo stage, route):
+  <https://docs.aws.amazon.com/apigateway/latest/developerguide/http-api-throttling.html>
 
 Giá đọc 2026-11-17 (file Price List bulk công khai của `ap-southeast-1`, trang giá):
 

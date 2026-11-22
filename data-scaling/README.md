@@ -1,12 +1,18 @@
 # Lab `data-scaling`: mở rộng tầng dữ liệu của svp quá một RDS instance
 
-Bài đo tầng dữ liệu của svp khi một RDS instance không còn đủ: Aurora PostgreSQL so với RDS for PostgreSQL Multi-AZ
-có read replica, RDS Proxy trước writer, chia đọc ghi ở client, ElastiCache for Valkey bật và tắt cluster mode, và
-partition bảng `timeline` của feed-service trên máy. Phần chỉ trên giấy (Aurora Global Database, DynamoDB global tables
-và DAX, Aurora Serverless v2, Aurora I/O-Optimized) nằm ở [`docs/data-tier-options.md`](docs/data-tier-options.md).
+Bài dựng tầng dữ liệu của svp ở cỡ lớn hơn một RDS instance: Aurora PostgreSQL có reader, RDS for PostgreSQL
+Multi-AZ có read replica, RDS Proxy, ElastiCache for Valkey bật và tắt cluster mode, cùng partition bảng `timeline` trên
+máy. Số đo (độ trễ replica, cửa sổ lỗi khi failover, số kết nối, p95 đọc, chi phí dọn dữ liệu) trả lời svp nên mở rộng
+bằng gì khi một instance không còn đủ. Ba phần chạy riêng: root `postgres/` (câu 1, 2, 4), root `valkey/` (câu 3), phần
+local `scripts/partition.sh` (câu 5, không AWS); phần chỉ trên giấy (Aurora Global Database, DynamoDB global tables và
+DAX, Aurora Serverless v2, Aurora I/O-Optimized) ở [`docs/data-tier-options.md`](docs/data-tier-options.md).
 
-Bài có ba phần, mỗi phần chạy một mình: root Terraform `postgres/` (câu 1, 2, 4), root `valkey/` (câu 3) và phần local
-`scripts/partition.sh` (câu 5, không AWS).
+| | |
+| --- | --- |
+| Dựng | Aurora writer và reader, RDS Multi-AZ và read replica, RDS Proxy; hai replication group Valkey; container partition |
+| Trả lời | Một RDS instance không đủ: replica trễ bao lâu, failover lỗi bao lâu, proxy và cluster mode đổi gì, partition rẻ hơn ra sao |
+| Phí | `postgres/` ~0,415 USD mỗi giờ, ≤ 1,23 mỗi buổi; `valkey/` ~0,143–0,181 mỗi giờ, ≤ 0,37 mỗi buổi; local 0 ([Chi phí](#chi-phí)) |
+| Thời gian | Ước tính, phút: `postgres/` dựng 35 + đo 55 + gỡ 25 ≈ 2 giờ; `valkey/` 15 + 37 + 15 ≈ 67; local ~10 ([cách tính](#chi-phí)) |
 
 ## Câu hỏi
 
@@ -39,61 +45,32 @@ failover ngắn hơn, hay cần nhiều bộ nhớ cache hơn một node.
 
 ## Thiết kế
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/data-scaling/overview-dark.svg">
+  <img src="../docs/diagrams/data-scaling/overview.svg" alt="Lab data-scaling: ba phần chạy riêng, phần nào trả lời câu nào?">
+</picture>
+
+Ba phần không dùng chung tài nguyên nào, nên mỗi buổi dựng một phần hay cả hai. Mũi tên liền trong các sơ đồ dưới là dữ
+liệu đi, mũi tên đứt là điều khiển (lệnh SSM, đọc secret). AZ 1, AZ 2 là hai AZ đầu của region xếp theo tên.
+
 Root `postgres/`:
 
-```mermaid
-flowchart LR
-    learner["Máy người học<br/>pg-session.sh, sweep.sh"]
-    api["API RDS, CloudWatch, SSM"]
-    sm["secret svp-lab-ds-pg-master"]
-    subgraph vpc["VPC svp-lab-ds-pg 10.67.0.0/20"]
-        subgraph pub["subnet public, AZ thứ nhất"]
-            loader["svp-lab-ds-pg-loader<br/>EC2 t4g.small, pg.sh, psql, pgbench"]
-        end
-        subgraph data["hai subnet data ở hai AZ, không route ra Internet"]
-            aurora[("svp-lab-ds-aurora<br/>writer svp-lab-ds-aurora-1, reader svp-lab-ds-aurora-2<br/>db.t4g.medium")]
-            proxy["svp-lab-ds-proxy<br/>RDS Proxy, TLS bắt buộc"]
-            rds[("svp-lab-ds-rds<br/>db.t4g.micro Multi-AZ, một standby không đọc được")]
-            replica[("svp-lab-ds-rds-replica<br/>read replica db.t4g.micro")]
-        end
-    end
-    learner -. "Run Command, failover, metric, sự kiện" .-> api
-    api -. "chạy pg.sh" .-> loader
-    loader -- "5432, verify-full, CA của RDS" --> aurora
-    loader -- "5432, verify-full, CA của Amazon Trust Services" --> proxy
-    proxy -- "pool kết nối tới writer" --> aurora
-    loader -- "5432, verify-full, CA của RDS" --> rds
-    loader -- "5432, verify-full, CA của RDS" --> replica
-    rds -. "sao chép bất đồng bộ" .-> replica
-    loader -. "GetSecretValue qua HTTPS công khai" .-> sm
-    proxy -. "đọc secret" .-> sm
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/data-scaling/postgres-dark.svg">
+  <img src="../docs/diagrams/data-scaling/postgres.svg"
+    alt="Root postgres: loader đo Aurora, RDS Multi-AZ và RDS Proxy qua những đường nào?">
+</picture>
+
+Mọi đường Postgres là cổng 5432, `sslmode=verify-full`. Nối thẳng tin bundle CA của RDS; qua proxy tin các root CA của
+Amazon Trust Services. RDS Proxy đọc chính secret `svp-lab-ds-pg-master` để đăng nhập Aurora.
 
 Root `valkey/`:
 
-```mermaid
-flowchart LR
-    learner["Máy người học<br/>kv-session.sh, sweep.sh"]
-    api["API ElastiCache, SSM"]
-    sm["secret svp-lab-ds-kv-app"]
-    subgraph vpc["VPC svp-lab-ds-kv 10.67.16.0/20"]
-        subgraph pub["subnet public, AZ thứ nhất"]
-            loader["svp-lab-ds-kv-loader<br/>EC2 t4g.small, kv.sh, valkey-cli, valkey-benchmark"]
-        end
-        subgraph data["hai subnet data ở hai AZ, không route ra Internet"]
-            subgraph cme["svp-lab-ds-cme, cluster mode bật, cache.t4g.micro"]
-                ng1["node group 0001<br/>primary, replica ở AZ khác"]
-                ng2["node group 0002<br/>primary, replica ở AZ khác"]
-            end
-            cmd["svp-lab-ds-cmd, cluster mode tắt, cache.t4g.micro<br/>primary, replica ở AZ khác"]
-        end
-    end
-    learner -. "Run Command, reshard, test-failover, sự kiện" .-> api
-    api -. "chạy kv.sh" .-> loader
-    loader -- "6379 TLS, user svp-lab-ds-kv-app, configuration endpoint" --> cme
-    loader -- "6379 TLS, user svp-lab-ds-kv-app, primary endpoint" --> cmd
-    loader -. "GetSecretValue qua HTTPS công khai" .-> sm
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/data-scaling/valkey-dark.svg">
+  <img src="../docs/diagrams/data-scaling/valkey.svg"
+    alt="Root valkey: loader đo Valkey cluster mode bật và tắt qua những đường nào?">
+</picture>
 
 Mỗi root có VPC, loader và secret riêng, không tra cứu tài nguyên của root kia. Loader là nơi duy nhất nối tới database:
 máy người học điều khiển nó bằng SSM Run Command qua `scripts/pg-session.sh`, `scripts/kv-session.sh`, mọi mốc thời gian
@@ -156,7 +133,7 @@ Lý do các lựa chọn:
   [N29].
 - **Công cụ trên loader.** User data chỉ cài gói từ kho của Amazon Linux 2023: `postgresql17`, `postgresql17-contrib`,
   `valkey`, `jq`, `bind-utils` [N18]. Danh sách gói không liệt kê file, nên buổi kiểm `pgbench`, `valkey-benchmark` có
-  thật trên loader (bước 4 phần `postgres/`, bước 2 phần `valkey/`). Không key pair, không cổng 22, IMDSv2 bắt buộc.
+  thật trên loader (bước 7 phần `postgres/`, bước 6 phần `valkey/`). Không key pair, không cổng 22, IMDSv2 bắt buộc.
 - **Version.** Aurora lấy minor mới nhất của major 17 (Aurora đòi version đầy đủ); RDS Proxy nhận Aurora PostgreSQL
   từ 17.4 ở `ap-southeast-1` [N9]. RDS để `engine_version = "17"`, RDS chọn minor. Valkey 9.1, họ parameter group
   `valkey9` [N24].
@@ -281,11 +258,40 @@ Sai số:
 - Metric CloudWatch có độ phân giải 60 s.
 - Một lần đo một loại failover: con số có thể khác ở lần sau, nhất là Multi-AZ.
 
+## Tài nguyên
+
+| Root | Việc | Tạo gì trên account trống |
+| --- | --- | --- |
+| `data-scaling/postgres` | Câu 1, 2, 4: mạng, loader, secret, Aurora, RDS Multi-AZ và replica, RDS Proxy | [Inventory][inv-pg] |
+| `data-scaling/valkey` | Câu 3: mạng, loader, secret, user Valkey, hai replication group | [Inventory][inv-kv] |
+
+Plan đầu trên account trống, với giá trị của file mẫu `<root>/*.auto.tfvars.example`, hứa đúng dòng `Plan:` ở mục root
+đó; trang inventory chia số theo phần và theo loại tài nguyên, kèm sơ đồ. Phần local (câu 5) không có root: container
+chạy trên máy, không tạo gì trên AWS.
+
+[inv-pg]: docs/inventory.md#data-scalingpostgres
+[inv-kv]: docs/inventory.md#data-scalingvalkey
+
 ## Chi phí
 
 Đơn giá on-demand, USD, `ap-southeast-1`, đọc 2026-11-18 từ file Price List bulk công khai và trang giá (cột nguồn).
 Free Tier không tính. Buổi của `postgres/` tính 2 giờ với cả ba biến bật; buổi của `valkey/` 1 giờ, tính như
 `svp-lab-ds-cme` có ba shard cả giờ. Phần local (câu 5) không tốn tiền AWS.
+
+Thời gian ở tóm tắt là ước tính, chưa đo; AWS không công bố thời gian tạo, xoá Aurora, RDS, RDS Proxy hay ElastiCache
+node-based:
+
+- `postgres/`: dựng ~35 phút (bước 1–8; apply tạo nối tiếp cluster Aurora, writer, reader, và song song RDS primary rồi
+  read replica; proxy sau writer), đo 55 phút (tải 3 300 s của bước 9 bao các bước 10–14, rồi bước 15), gỡ và quét
+  ~25 phút: cộng ~2 giờ, bằng buổi mà bảng dưới tính.
+- `valkey/`: dựng ~15 phút (bước 1–8; hai group tạo song song), đo 37 phút (thời lượng định sẵn của bước 9–11, đoạn
+  dưới bảng của phần này), gỡ và quét ~15 phút: cộng ~67 phút. Node tính tiền từ lúc `available` (cuối bước 4) tới
+  khi xoá xong: bước 5–8, đo và xoá group, ước ~55 phút, nên vừa 1 giờ mà bảng dưới tính.
+- Local: ~10 phút. Script dựng container, nạp ~4,6 triệu dòng `timeline` mỗi bản (khoảng 9 300 video, mỗi tác giả 500
+  người theo dõi với giá trị mặc định) ước ~5 phút, đo bốn cửa sổ 60 s cùng `EXPLAIN`, rồi xoá container khi thoát;
+  dòng `size:` của output in số giây nạp thật.
+
+[Sau buổi](#sau-buổi) thay các số này bằng số đo.
 
 | Tài nguyên | Đơn vị | Đơn giá | Nguồn | Ngày đọc |
 | --- | --- | --- | --- | --- |
@@ -375,50 +381,109 @@ Phần `valkey/`, mỗi buổi 1 giờ:
 | **Cộng mỗi buổi** | | **≤ 0,37** |
 
 Node ElastiCache on-demand tính từ lúc node `available` tới khi bị xoá, mỗi giờ lẻ tính tròn một giờ [P11]: bảng trên
-đúng khi mọi node sống dưới 60 phút. Các bước 5–7 của phần `valkey/` ở `## Chạy buổi` có thời lượng định sẵn 37 phút
-(`bench` 2 × 60 s, bước 6 1 800 s, bước 7 300 s), cộng vài phút lệnh kiểm; thời gian dựng và xoá group không có số AWS
-công bố, nên destroy ngay sau bước 7. Sáu node dựng từ đầu sống quá 60 phút thì mỗi node tính thêm một giờ:
-6 × 0,0192 = 0,1152. Chạy lại reshard lên bốn shard (bước 6) dẫn tới trường hợp đó, cộng hai node của shard thứ tư:
+đúng khi mọi node sống dưới 60 phút. Các bước 9–11 của phần `valkey/` ở [Chạy buổi](#chạy-buổi) có thời lượng định sẵn
+37 phút (`bench` 2 × 60 s, bước 10 1 800 s, bước 11 300 s), cộng vài phút lệnh kiểm; thời gian dựng và xoá group không có
+số AWS công bố, nên gỡ ngay sau bước 11. Sáu node dựng từ đầu sống quá 60 phút thì mỗi node tính thêm một giờ:
+6 × 0,0192 = 0,1152. Chạy lại reshard lên bốn shard (bước 10) dẫn tới trường hợp đó, cộng hai node của shard thứ tư:
 2 × 0,0192 = 0,0384 mỗi giờ.
 
 So ElastiCache Serverless: tối thiểu 0,1 GB × 0,101 = 0,0101 mỗi giờ cho dữ liệu, cộng ECPU (mỗi KB đọc hay ghi một
 ECPU [P11]); 10 000 request mỗi giây dưới 1 KB là 36 000 000 ECPU mỗi giờ, 36 × 0,0027 ≈ 0,097. Hai node
 `cache.t4g.micro` của group cluster mode tắt là 0,0384 mỗi giờ, bất kể tải.
 
+## Điều kiện trước
+
+- [ ] **Account `svp-stg`** có và profile `anhnv-stg` ghi vào nó (runbook
+  [`accounts-setup.md`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/accounts-setup.md) của
+  `svp-infra`). Bài chỉ dùng region `ap-southeast-1`.
+- [ ] **Trên máy:** AWS CLI v2, `jq`, Terraform 1.15; phần local cần Docker.
+- [ ] **Repo:** PR của bài đã merge; chạy từ gốc repo `svp-labs`, trên `main`.
+- [ ] **Biến account:** `SVP_AWS_STG_ACCOUNT_ID` (12 số của account `svp-stg`) export trong terminal, không ghi vào file
+  nào; mọi script buổi đọc nó.
+- [ ] **Thư mục buổi** đặt ngay đầu buổi, cùng terminal với mọi lệnh sau (lý do:
+  [`docs/terraform-commands.md`](../docs/terraform-commands.md#thư-mục-buổi)):
+
+  ```sh
+  export SVP_LAB_SESSION_DIR="$PWD/.session/data-scaling-$(date -u +%Y%m%dT%H%M%SZ)" && mkdir -p "$SVP_LAB_SESSION_DIR"
+  ```
+
+- [ ] **Lab chạy trước:** không cần; bài không đọc tài nguyên của lab khác, hai root không đọc tài nguyên của nhau.
+
 ## Chạy buổi
 
-Máy người học cần AWS CLI v2, `jq`, Terraform 1.15; phần local cần Docker. Chạy từ gốc repo `svp-labs`, sau khi PR của
-bài đã merge, trên `main`. Biến `SVP_AWS_STG_ACCOUNT_ID` (12 số của account `svp-stg`) export trong terminal, không ghi
-vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`, region
-`ap-southeast-1`. Mỗi lệnh `start` in một command id: ghi lại để đọc bằng `result`.
+Mọi lệnh `terraform` theo khuôn của [`docs/terraform-commands.md`](../docs/terraform-commands.md) (lý do từng phần ở đó).
+Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`, region `ap-southeast-1`. Mỗi lệnh `start` in một command
+id: ghi lại để đọc bằng `result`.
 
 ### Phần `postgres/` (câu 1, 2, 4)
 
-1. Kiểm account trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
+1. **Kiểm account** trước lệnh ghi đầu tiên.
 
    ```sh
    AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
    ```
 
-2. Chọn phần của buổi: chép file mẫu (bật cả ba biến). Muốn bỏ proxy thì đặt `proxy = false` trong file chép.
+   - Mong đợi, dán lại: 12 số bằng `$SVP_AWS_STG_ACCOUNT_ID`.
+   - Bẫy: số khác thì dừng; profile đang trỏ account khác.
+
+2. **Chọn phần của buổi:** chép file mẫu (bật cả ba biến `aurora`, `rds`, `proxy`). Muốn bỏ proxy thì đặt `proxy =
+   false` trong file chép.
 
    ```sh
    cp data-scaling/postgres/postgres.auto.tfvars.example data-scaling/postgres/postgres.auto.tfvars
    ```
 
-3. Dựng hạ tầng. `init` không backend (state local); `plan` ghi `tfplan` (không commit). Dán lại dòng `Plan:`,
-   `Apply complete` và output `aurora_endpoints`, `proxy_endpoint`.
+3. **Init.** Root không có backend: state là file local, `init` chỉ tải provider theo lock file đã commit.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/postgres init
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/postgres plan -out=tfplan
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/postgres apply tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/postgres init -input=false
    ```
 
-4. Chờ SSM agent và script boot của loader, rồi kiểm công cụ trên loader. Lệnh đầu phải có dòng `<loader_instance_id>
-   Online` (id là output của bước 3). Lệnh thứ hai in một command id; lệnh thứ ba, với id đó, phải in bốn đường dẫn
-   (`psql`, `pgbench`, `timeout`, `dig`). Thiếu đường nào thì script boot chưa xong hay gói thiếu: chờ một phút rồi chạy
-   lại hai lệnh sau.
+   - Mong đợi: `Terraform has been successfully initialized!`.
+
+4. **Plan** ra file, bản văn bản vào thư mục buổi, rồi đọc.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/postgres plan -input=false -out=data-scaling-postgres.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/postgres show -no-color data-scaling-postgres.tfplan \
+     > "$SVP_LAB_SESSION_DIR/data-scaling-postgres-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/data-scaling-postgres-plan.txt"
+   ```
+
+   - Mong đợi, dán lại: dòng `Plan:` bằng dòng `Plan:` của root ở [trang inventory][inv-pg] (inventory đếm với cả ba
+     biến bật như file mẫu); mọi dòng `will be created`.
+   - Phần chênh: `proxy = false` bớt 9 `to add` (8 tài nguyên của `module.rds_proxy` và luật vào từ proxy ở
+     `module.aurora`); `rds = false` bớt 5 (`module.rds`); `aurora = false` (cần `proxy = false`) bớt thêm 6.
+   - Bẫy: `No value for required variable` là thiếu `TF_VAR_account_id` (biến account chưa export). Có `destroyed` hay
+     `must be replaced`, hay số khác mong đợi: không apply, dán các dòng đó
+     ([Đọc plan](../docs/terraform-commands.md#đọc-plan)).
+
+5. **Apply** đúng file plan đã đọc.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/postgres apply -input=false data-scaling-postgres.tfplan \
+     && rm data-scaling/postgres/data-scaling-postgres.tfplan
+   ```
+
+   - Mong đợi, dán lại: `Apply complete!` cùng output `loader_instance_id`, `aurora_endpoints`, `proxy_endpoint`.
+   - Bẫy: lỗi giữa chừng thì đọc lỗi, đừng apply lại ngay
+     ([Khi apply lỗi giữa chừng](../docs/terraform-commands.md#khi-apply-lỗi-giữa-chừng)).
+
+6. **Plan lại**, không `-out`: code và account phải khớp.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/postgres plan -input=false
+   ```
+
+   - Mong đợi: `No changes. Your infrastructure matches the configuration.`
+   - Bẫy: còn dòng đổi là lỗi code: dán plan, không apply.
+
+7. **Chờ SSM agent và script boot của loader**, rồi kiểm công cụ trên loader. Lệnh thứ hai in một command id; lệnh thứ
+   ba đọc kết quả của id đó.
 
    ```sh
    AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
@@ -431,8 +496,12 @@ vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp
      --query 'CommandInvocations[].CommandPlugins[].Output' --output text
    ```
 
-5. Kiểm script buổi và endpoint, rồi tạo dữ liệu mẫu ở Aurora và RDS (replica nhận qua sao chép; proxy dùng database
-   của Aurora). Dán lại dòng `profile anhnv-stg signs in…`, bảy dòng endpoint (không dòng `off` nào) và hai dòng `init`.
+   - Mong đợi, dán lại: dòng `<loader_instance_id> Online` (id là output của bước 5); bốn đường dẫn (`psql`, `pgbench`,
+     `timeout`, `dig`).
+   - Bẫy: thiếu đường nào thì script boot chưa xong hay gói thiếu: chờ một phút rồi chạy lại hai lệnh sau.
+
+8. **Kiểm script buổi và endpoint**, rồi tạo dữ liệu mẫu ở Aurora và RDS (replica nhận qua sao chép; proxy dùng
+   database của Aurora).
 
    ```sh
    data-scaling/scripts/pg-session.sh check
@@ -441,51 +510,59 @@ vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp
    data-scaling/scripts/pg-session.sh run init rds
    ```
 
-6. Bật **tải ghi đều** 50 giao dịch mỗi giây trên Aurora và RDS cho cả phần còn lại của buổi (3 300 s, mức tối đa của
-   `pg.sh`). Hai lệnh trả về ngay; ghi lại hai command id. Đọc kết quả ở bước 12.
+   - Mong đợi, dán lại: dòng `profile anhnv-stg signs in…`, bảy dòng endpoint (không dòng `off` nào) và hai dòng `init`.
+   - Bẫy: dòng `off` là phần đó đang tắt trong `postgres.auto.tfvars`; các bước đo phần đó sẽ lỗi.
+
+9. **Bật tải ghi đều** 50 giao dịch mỗi giây trên Aurora và RDS cho cả phần còn lại của buổi (3 300 s, mức tối đa của
+   `pg.sh`). Hai lệnh trả về ngay.
 
    ```sh
    data-scaling/scripts/pg-session.sh start load aurora-writer 50 3300
    data-scaling/scripts/pg-session.sh start load rds 50 3300
    ```
 
-7. Câu 1, độ trễ replica, sau khi tải chạy ít nhất 2 phút. Mỗi lệnh `lag` mất khoảng một phút. Dán lại hai dòng
-   `replica lag … over 30 samples` và ba dòng metric.
+   - Mong đợi: hai command id; ghi lại, đọc kết quả ở bước 15.
 
-   ```sh
-   data-scaling/scripts/pg-session.sh run lag aurora-writer aurora-reader 30
-   data-scaling/scripts/pg-session.sh run lag rds rds-replica 30
-   data-scaling/scripts/pg-session.sh metrics lag 15
-   ```
+10. **Câu 1, độ trễ replica**, sau khi tải chạy ít nhất 2 phút. Mỗi lệnh `lag` mất khoảng một phút.
 
-8. Câu 4, p95 đọc trên endpoint ghi rồi endpoint đọc, trong lúc tải chạy. Mỗi lệnh 2 phút. Dán lại bốn dòng `p95 read
-   latency`.
+    ```sh
+    data-scaling/scripts/pg-session.sh run lag aurora-writer aurora-reader 30
+    data-scaling/scripts/pg-session.sh run lag rds rds-replica 30
+    data-scaling/scripts/pg-session.sh metrics lag 15
+    ```
 
-   ```sh
-   data-scaling/scripts/pg-session.sh run read aurora-writer 100 120
-   data-scaling/scripts/pg-session.sh run read aurora-reader 100 120
-   data-scaling/scripts/pg-session.sh run read rds 100 120
-   data-scaling/scripts/pg-session.sh run read rds-replica 100 120
-   ```
+    - Mong đợi, dán lại: hai dòng `replica lag … over 30 samples` và ba dòng metric.
 
-9. Câu 1 và 2, failover Aurora. Hai probe song song 300 s: probe ghi trên writer endpoint và qua proxy, probe đọc trên
-   hai instance endpoint. Chờ 30 s sau hai lệnh `start` (có lần thành công trước failover), rồi failover. Sau 300 s,
-   đọc hai kết quả bằng hai command id; dán lại các dòng `== …`, `error window …`, `chain …`, `attempts: …` và các sự kiện.
+11. **Câu 4, p95 đọc** trên endpoint ghi rồi endpoint đọc, trong lúc tải chạy. Mỗi lệnh 2 phút.
 
-   ```sh
-   data-scaling/scripts/pg-session.sh start probe write 300 aurora-writer proxy
-   data-scaling/scripts/pg-session.sh start probe read 300 aurora-1 aurora-2
-   data-scaling/scripts/pg-session.sh failover aurora
-   data-scaling/scripts/pg-session.sh result <command id của probe write>
-   data-scaling/scripts/pg-session.sh result <command id của probe read>
-   data-scaling/scripts/pg-session.sh events 30
-   ```
+    ```sh
+    data-scaling/scripts/pg-session.sh run read aurora-writer 100 120
+    data-scaling/scripts/pg-session.sh run read aurora-reader 100 120
+    data-scaling/scripts/pg-session.sh run read rds 100 120
+    data-scaling/scripts/pg-session.sh run read rds-replica 100 120
+    ```
 
-   Một dòng `window not closed` nghĩa là probe dừng trước khi endpoint trở lại: chạy lại bước này với số giây lớn hơn.
-   Dòng `== … (…, log <đường>)` cho đường log; `run window <đường>` in lại cửa sổ từ log đó.
+    - Mong đợi, dán lại: bốn dòng `p95 read latency`.
 
-10. Câu 1, reboot có failover của RDS Multi-AZ. Probe ghi trên `rds` 600 s (mốc AWS tới 120 s [N3]); chờ 30 s rồi
-    failover. Sau 600 s, dán lại kết quả và sự kiện.
+12. **Câu 1 và 2, failover Aurora.** Hai probe song song 300 s: probe ghi trên writer endpoint và qua proxy, probe đọc
+    trên hai instance endpoint. Chờ 30 s sau hai lệnh `start` (có lần thành công trước failover), rồi failover. Sau 300
+    s, đọc hai kết quả bằng hai command id.
+
+    ```sh
+    data-scaling/scripts/pg-session.sh start probe write 300 aurora-writer proxy
+    data-scaling/scripts/pg-session.sh start probe read 300 aurora-1 aurora-2
+    data-scaling/scripts/pg-session.sh failover aurora
+    data-scaling/scripts/pg-session.sh result <command id của probe write>
+    data-scaling/scripts/pg-session.sh result <command id của probe read>
+    data-scaling/scripts/pg-session.sh events 30
+    ```
+
+    - Mong đợi, dán lại: các dòng `== …`, `error window …`, `chain …`, `attempts: …` và các sự kiện.
+    - Bẫy: một dòng `window not closed` nghĩa là probe dừng trước khi endpoint trở lại: chạy lại bước này với số giây lớn
+      hơn. Dòng `== … (…, log <đường>)` cho đường log; `run window <đường>` in lại cửa sổ từ log đó.
+
+13. **Câu 1, reboot có failover của RDS Multi-AZ.** Probe ghi trên `rds` 600 s (mốc AWS tới 120 s [N3]); chờ 30 s rồi
+    failover.
 
     ```sh
     data-scaling/scripts/pg-session.sh start probe write 600 rds
@@ -494,9 +571,10 @@ vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp
     data-scaling/scripts/pg-session.sh events 30
     ```
 
-11. Câu 2, burst thẳng vào writer rồi qua proxy, 50 client trong 60 s. Sau mỗi burst chờ 3 phút cho metric về rồi đọc
-    5 phút gần nhất; hai burst cách nhau ít nhất 6 phút để hai cửa sổ không chồng. Dán lại hai khối `burst …` và hai lần
-    bốn dòng metric.
+    - Mong đợi, dán lại: kết quả probe sau 600 s và các sự kiện.
+
+14. **Câu 2, burst** thẳng vào writer rồi qua proxy, 50 client trong 60 s. Sau mỗi burst chờ 3 phút cho metric về rồi
+    đọc 5 phút gần nhất.
 
     ```sh
     data-scaling/scripts/pg-session.sh run burst aurora-writer 50 60
@@ -505,31 +583,78 @@ vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp
     data-scaling/scripts/pg-session.sh metrics burst 5
     ```
 
-12. Đọc kết quả hai lệnh tải của bước 6 khi chúng xong (`command … still running` thì đọc lại sau). Dán lại các dòng
-    `tps`, `number of failed transactions` và các dòng `pgbench ended with …` (mỗi lần failover làm rớt client).
+    - Mong đợi, dán lại: hai khối `burst …` và hai lần bốn dòng metric.
+    - Bẫy: hai burst cách nhau ít nhất 6 phút, nếu không hai cửa sổ metric chồng nhau.
+
+15. **Đọc kết quả hai lệnh tải** của bước 9 khi chúng xong.
 
     ```sh
     data-scaling/scripts/pg-session.sh result <command id của load aurora-writer>
     data-scaling/scripts/pg-session.sh result <command id của load rds>
     ```
 
+    - Mong đợi, dán lại: các dòng `tps`, `number of failed transactions` và các dòng `pgbench ended with …` (mỗi lần
+      failover làm rớt client).
+    - Bẫy: `command … still running` thì đọc lại sau.
+
 ### Phần `valkey/` (câu 3)
 
-1. Kiểm account như bước 1 của phần `postgres/`, rồi chép file mẫu (`shards = 2`) và dựng. Dán lại dòng `Plan:`,
-   `Apply complete` và hai output endpoint.
+1. **Kiểm account** như bước 1 của phần `postgres/`, rồi chép file mẫu (`shards = 2`).
 
    ```sh
    AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
    cp data-scaling/valkey/valkey.auto.tfvars.example data-scaling/valkey/valkey.auto.tfvars
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/valkey init
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/valkey plan -out=tfplan
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/valkey apply tfplan
    ```
 
-2. Kiểm loader như bước 4 của phần `postgres/`, với loader `svp-lab-ds-kv-loader`; lệnh cuối phải in bốn đường dẫn
-   (`valkey-cli`, `valkey-benchmark`, `timeout`, `getent`).
+   - Mong đợi, dán lại: 12 số bằng `$SVP_AWS_STG_ACCOUNT_ID`; số khác thì dừng.
+
+2. **Init.**
 
    ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/valkey init -input=false
+   ```
+
+   - Mong đợi: `Terraform has been successfully initialized!`.
+
+3. **Plan** ra file, bản văn bản vào thư mục buổi, rồi đọc.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/valkey plan -input=false -out=data-scaling-valkey.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/valkey show -no-color data-scaling-valkey.tfplan \
+     > "$SVP_LAB_SESSION_DIR/data-scaling-valkey-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/data-scaling-valkey-plan.txt"
+   ```
+
+   - Mong đợi, dán lại: dòng `Plan:` bằng dòng `Plan:` của root ở [trang inventory][inv-kv]; số shard không đổi số tài
+     nguyên. Mọi dòng `will be created`.
+   - Bẫy: như bước 4 của phần `postgres/`.
+
+4. **Apply** đúng file plan đã đọc.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/valkey apply -input=false data-scaling-valkey.tfplan \
+     && rm data-scaling/valkey/data-scaling-valkey.tfplan
+   ```
+
+   - Mong đợi, dán lại: `Apply complete!` cùng output `cme_configuration_endpoint`, `cmd_primary_endpoint`.
+
+5. **Plan lại**, không `-out`.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/valkey plan -input=false
+   ```
+
+   - Mong đợi: `No changes. Your infrastructure matches the configuration.`
+
+6. **Chờ SSM agent và kiểm công cụ trên loader** `svp-lab-ds-kv-loader`, như bước 7 của phần `postgres/`.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
+     --query 'InstanceInformationList[].[InstanceId,PingStatus]'
    AWS_PROFILE=anhnv-stg aws ssm send-command --region ap-southeast-1 --document-name AWS-RunShellScript \
      --targets Key=tag:Name,Values=svp-lab-ds-kv-loader \
      --parameters 'commands=["command -v valkey-cli valkey-benchmark timeout getent"]' \
@@ -538,147 +663,349 @@ vào file nào; mọi script buổi đọc nó. Buổi chạy trong account `svp
      --query 'CommandInvocations[].CommandPlugins[].Output' --output text
    ```
 
-3. Đọc hai group: trạng thái, endpoint, node group và slot của mỗi node group (số `0001`, `0002` mà probe và failover
-   nhận). Dán lại output.
+   - Mong đợi, dán lại: dòng `<loader_instance_id> Online`; bốn đường dẫn (`valkey-cli`, `valkey-benchmark`, `timeout`,
+     `getent`).
+   - Bẫy: thiếu đường nào thì chờ một phút rồi chạy lại hai lệnh sau.
+
+7. **Đọc hai group:** trạng thái, endpoint, node group và slot của mỗi node group (số `0001`, `0002` mà probe và
+   failover nhận).
 
    ```sh
    data-scaling/scripts/kv-session.sh check
    data-scaling/scripts/kv-session.sh groups
    ```
 
-4. Câu 3, client thấy gì: slot của khoá svp, `MOVED` với client không biết cluster, `CROSSSLOT`, hash tag, `SELECT` các
-   db svp dùng, trên cả hai group. Dán lại toàn bộ output.
+   - Mong đợi, dán lại: toàn bộ output.
+
+8. **Câu 3, client thấy gì:** slot của khoá svp, `MOVED` với client không biết cluster, `CROSSSLOT`, hash tag, `SELECT`
+   các db svp dùng, trên cả hai group.
 
    ```sh
    data-scaling/scripts/kv-session.sh run client
    ```
 
-5. Thông lượng nền, mỗi group 60 s. Dán lại hai dòng `bench log: …` và các dòng theo phút.
+   - Mong đợi, dán lại: toàn bộ output.
+
+9. **Thông lượng nền**, mỗi group 60 s.
 
    ```sh
    data-scaling/scripts/kv-session.sh run bench 60 cme
    data-scaling/scripts/kv-session.sh run bench 60 cmd
    ```
 
-6. Reshard online từ hai lên ba shard trong lúc có tải, cùng lúc failover primary của `svp-lab-ds-cmd`: hai group độc
-   lập, gộp chung để buổi vừa một giờ (`## Chi phí`). Chạy `bench` và probe trên node group `0001` của `cme` 1 800 s và
-   probe 300 s trên `cmd`; chờ 30 s rồi failover `cmd` (mỗi lệnh `failover` chỉ gọi một lần); chờ đủ 2 phút từ lệnh
-   `start` đầu (có số trước reshard), rồi reshard. Lệnh `reshard` đợi tới khi group về `available` với ba shard và in
-   `reshard time`; khi `reshard` trả về, đọc kết quả probe `cmd`, hai kết quả còn lại sau 1 800 s. Dán lại output của
-   `reshard`, của ba `result` và `groups`: khoá probe in kèm slot, so với slot của node group mới để biết khoá nào đã
-   sang shard khác. Reshard chưa xong khi probe dừng thì cửa sổ in `window not closed`: chạy lại `start bench`, `start
-   probe … cme 0001` với số giây lớn hơn (tối đa 3 300) và `reshard 4`, không failover lại; buổi khi đó quá một giờ
-   (`## Chi phí`).
+   - Mong đợi, dán lại: hai dòng `bench log: …` và các dòng theo phút.
 
-   ```sh
-   data-scaling/scripts/kv-session.sh start bench 1800 cme
-   data-scaling/scripts/kv-session.sh start probe 1800 cme 0001
-   data-scaling/scripts/kv-session.sh start probe 300 cmd
-   data-scaling/scripts/kv-session.sh failover cmd 0001
-   data-scaling/scripts/kv-session.sh reshard 3
-   data-scaling/scripts/kv-session.sh result <command id của probe cmd>
-   data-scaling/scripts/kv-session.sh result <command id của bench>
-   data-scaling/scripts/kv-session.sh result <command id của probe cme>
-   data-scaling/scripts/kv-session.sh groups
-   ```
+10. **Reshard online** từ hai lên ba shard trong lúc có tải, cùng lúc failover primary của `svp-lab-ds-cmd`: hai group
+    độc lập, gộp chung để buổi vừa một giờ ([Chi phí](#chi-phí)). Chạy `bench` và probe trên node group `0001` của
+    `cme` 1 800 s và probe 300 s trên `cmd`; chờ 30 s rồi failover `cmd` (mỗi lệnh `failover` chỉ gọi một lần); chờ đủ
+    2 phút từ lệnh `start` đầu (có số trước reshard), rồi reshard. Lệnh `reshard` đợi tới khi group về `available` với
+    ba shard và in `reshard time`; khi `reshard` trả về, đọc kết quả probe `cmd`, hai kết quả còn lại sau 1 800 s.
 
-   Ngay sau `reshard`, đặt `shards = 3` trong `data-scaling/valkey/valkey.auto.tfvars`: lần `plan`, `apply` sau không đòi
-   bớt shard. Muốn đọc lại thông lượng theo phút hay cửa sổ lỗi: `run rates <đường bench.log>`, `run window <đường
-   probe.log>` với đường mà `result` in.
+    ```sh
+    data-scaling/scripts/kv-session.sh start bench 1800 cme
+    data-scaling/scripts/kv-session.sh start probe 1800 cme 0001
+    data-scaling/scripts/kv-session.sh start probe 300 cmd
+    data-scaling/scripts/kv-session.sh failover cmd 0001
+    data-scaling/scripts/kv-session.sh reshard 3
+    data-scaling/scripts/kv-session.sh result <command id của probe cmd>
+    data-scaling/scripts/kv-session.sh result <command id của bench>
+    data-scaling/scripts/kv-session.sh result <command id của probe cme>
+    data-scaling/scripts/kv-session.sh groups
+    ```
 
-7. Failover primary của node group `0001` ở `svp-lab-ds-cme` sau reshard, probe 300 s; chờ 30 s sau `start` rồi
-   failover, một lần. Dán lại kết quả và sự kiện (gồm cả failover của `cmd` ở bước 6).
+    - Mong đợi, dán lại: output của `reshard`, của ba `result` và `groups`. Khoá probe in kèm slot: so với slot của node
+      group mới để biết khoá nào đã sang shard khác.
+    - Ngay sau `reshard`, đặt `shards = 3` trong `data-scaling/valkey/valkey.auto.tfvars`: lần plan, apply sau không đòi
+      bớt shard. Muốn đọc lại thông lượng theo phút hay cửa sổ lỗi: `run rates <đường bench.log>`, `run window <đường
+      probe.log>` với đường mà `result` in.
+    - Bẫy: reshard chưa xong khi probe dừng thì cửa sổ in `window not closed`: chạy lại `start bench`, `start probe …
+      cme 0001` với số giây lớn hơn (tối đa 3 300) và `reshard 4`, không failover lại; buổi khi đó quá một giờ
+      ([Chi phí](#chi-phí)).
 
-   ```sh
-   data-scaling/scripts/kv-session.sh start probe 300 cme 0001
-   data-scaling/scripts/kv-session.sh failover cme 0001
-   data-scaling/scripts/kv-session.sh result <command id của probe cme>
-   data-scaling/scripts/kv-session.sh events 60
-   ```
+11. **Failover primary** của node group `0001` ở `svp-lab-ds-cme` sau reshard, probe 300 s; chờ 30 s sau `start` rồi
+    failover, một lần.
+
+    ```sh
+    data-scaling/scripts/kv-session.sh start probe 300 cme 0001
+    data-scaling/scripts/kv-session.sh failover cme 0001
+    data-scaling/scripts/kv-session.sh result <command id của probe cme>
+    data-scaling/scripts/kv-session.sh events 60
+    ```
+
+    - Mong đợi, dán lại: kết quả và sự kiện (gồm cả failover của `cmd` ở bước 10).
 
 ### Phần local: partition `timeline` (câu 5)
 
 Chạy trên máy, không AWS, không mạng trong container; cần Docker, khoảng 2 GB RAM và 3 GB đĩa trống trong lúc chạy. Script
 dựng container `svp-lab-ds-partition` từ image PostgreSQL 17 ghim digest, nạp dữ liệu, đo bốn lượt, `EXPLAIN`, in bảng
-kết quả, rồi xoá container và volume khi thoát. Mặc định 20 000 user, 50 follow mỗi user, 300 video mỗi ngày. Dán lại
-toàn bộ output.
+kết quả, rồi xoá container và volume khi thoát. Mặc định 20 000 user, 50 follow mỗi user, 300 video mỗi ngày.
 
 ```sh
 data-scaling/scripts/partition.sh
 ```
 
-Script dừng với `a container or volume named svp-lab-ds-partition exists` khi một lần chạy khác đang chạy hay bị cắt giữa
-chừng: lệnh xoá in ngay trong thông báo. Máy bận việc khác làm số tuyệt đối nhiễu: chạy khi máy rảnh.
+- Mong đợi, dán lại: toàn bộ output.
+- Bẫy: script dừng với `a container or volume named svp-lab-ds-partition exists` khi một lần chạy khác đang chạy hay bị
+  cắt giữa chừng: lệnh xoá in ngay trong thông báo. Máy bận việc khác làm số tuyệt đối nhiễu: chạy khi máy rảnh.
 
 ### Bật tắt phần và xoay mật khẩu
 
-- Bỏ một phần của `postgres/` giữa buổi: đặt biến đó `false` trong `data-scaling/postgres/postgres.auto.tfvars` rồi chạy
-  lại `plan -out=tfplan`, `apply tfplan` như bước 3; chỉ phần đó bị xoá. `proxy = true` cần `aurora = true`.
-- Xoay mật khẩu master của `postgres/`: tăng `password_version` trong `postgres.auto.tfvars` (ví dụ `password_version =
-  2`, giữ số đó ở file), rồi `plan`, `apply`. Terraform ghi mật khẩu mới vào secret, Aurora và RDS cùng lượt; replica theo
-  nguồn. `pg.sh` đọc secret ở mỗi lệnh, nhưng lệnh `start` đang chạy giữ mật khẩu cũ và kết nối lại sẽ lỗi: xoay khi không
-  còn lệnh `start` nào chạy. Sau `apply`, thử ghi ngắn trên mọi đường; mỗi khối phải in `no failed attempt`:
+Mỗi thay đổi dưới đây đi qua plan, apply theo cùng khuôn với phần đó (cùng lệnh `plan -out`, `show`, `apply`: bước 4,
+5 của `postgres/`, bước 3, 4 của `valkey/`), rồi plan lại như bước 6 của `postgres/`, bước 5 của `valkey/`.
+
+- **Bỏ một phần của `postgres/` giữa buổi:** đặt biến đó `false` trong `data-scaling/postgres/postgres.auto.tfvars`
+  rồi plan; chỉ phần đó bị xoá. `proxy = true` cần `aurora = true`. Mong đợi `Plan: 0 to add, 0 to change, N to
+  destroy.`, N bằng số `to add` mà phần đó bớt ở bước 4 (proxy 9, rds 5, aurora 6 khi proxy đã tắt); bật lại thì N
+  thành `to add`.
+- **Xoay mật khẩu master của `postgres/`:** tăng `password_version` trong `postgres.auto.tfvars` (ví dụ
+  `password_version = 2`, giữ số đó ở file), rồi plan, apply. Terraform ghi mật khẩu mới vào secret, Aurora và RDS
+  cùng lượt; replica theo nguồn. Mong đợi: không dòng `destroyed`, `must be replaced` nào của `aws_rds_cluster`,
+  `aws_db_instance`; có thì dừng, dán các dòng đó. `pg.sh` đọc secret ở mỗi lệnh, nhưng lệnh `start` đang chạy giữ mật
+  khẩu cũ và kết nối lại sẽ lỗi: xoay khi không còn lệnh `start` nào chạy. Sau `apply`, thử ghi ngắn trên mọi đường;
+  mỗi khối phải in `no failed attempt`:
 
   ```sh
   data-scaling/scripts/pg-session.sh run probe write 5 aurora-writer proxy
   data-scaling/scripts/pg-session.sh run probe write 5 rds
   ```
 
-- Xoay mật khẩu của user Valkey: tăng `password_version` trong `valkey.auto.tfvars` (giữ cả `shards`), `plan`, `apply`;
-  Terraform ghi secret và user cùng lượt. Lệnh `start` đang chạy (mật khẩu của `valkey-benchmark` nằm trên argv) kết nối
-  lại sẽ lỗi: xoay khi không còn lệnh nào chạy, rồi thử `run probe 5 cmd`.
+- **Xoay mật khẩu của user Valkey:** tăng `password_version` trong `valkey.auto.tfvars` (giữ cả `shards`), plan,
+  apply; Terraform ghi secret và user cùng lượt. Mong đợi: không dòng `destroyed`, `must be replaced` nào của
+  `aws_elasticache_*`. Lệnh `start` đang chạy (mật khẩu của `valkey-benchmark` nằm trên argv) kết nối lại sẽ lỗi: xoay
+  khi không còn lệnh nào chạy, rồi thử `run probe 5 cmd`.
 
 ## Dọn dẹp
 
-Chạy đủ bốn bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng, cho mọi root đã dựng.
+Chạy đủ năm bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng; bước 1, 2 cho mọi root đã dựng.
 
-1. Destroy từng root đã dựng, cùng biến như lúc dựng. Lệnh `start` còn chạy trên loader dừng theo loader. Database xoá
-   không snapshot cuối, xoá automated backup; secret xoá ngay. Dán lại dòng `Destroy complete` của mỗi root.
+1. **Gỡ root `postgres/`** bằng plan `-destroy`, đọc rồi apply đúng file đó. Lệnh `start` còn chạy trên loader dừng theo
+   loader. Database xoá không snapshot cuối, xoá automated backup; secret xoá ngay.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/postgres destroy
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID terraform -chdir=data-scaling/valkey destroy
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/postgres plan -destroy -input=false -out=data-scaling-postgres-destroy.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/postgres show -no-color data-scaling-postgres-destroy.tfplan \
+     > "$SVP_LAB_SESSION_DIR/data-scaling-postgres-destroy-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/data-scaling-postgres-destroy-plan.txt"
    ```
 
-2. Quét sót, chỉ đọc. Mong đợi mọi dòng `none` và `sweep: nothing left`. Dòng `ERROR` nghĩa là một danh sách không đọc
-   được (phiên hết hạn): sửa rồi quét lại. Có dòng `LEFT` thì xoá thứ đó rồi quét lại.
+   Đọc `data-scaling-postgres-destroy-plan.txt` trong thư mục buổi; đúng như mong đợi (dưới) thì sang khối sau, apply đúng file plan đã đọc:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/postgres apply -input=false data-scaling-postgres-destroy.tfplan \
+     && rm data-scaling/postgres/data-scaling-postgres-destroy.tfplan
+   ```
+
+   - Mong đợi, dán lại: `Plan: 0 to add, 0 to change, N to destroy.`, N bằng số tài nguyên đang có: số `to add` của bước
+     4, cộng trừ các phần bật tắt giữa buổi; rồi `Destroy complete!`.
+   - Bẫy: N nhỏ hơn thì một phần chưa từng tạo (apply lỗi giữa chừng) hay đã bị xoá tay; đọc danh sách trước khi apply.
+
+2. **Gỡ root `valkey/`** cùng khuôn. `shards` trong `valkey.auto.tfvars` đã bằng số shard thật (bước 10 của phần
+   `valkey/`), nên plan không đòi đổi gì trước khi xoá.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+     terraform -chdir=data-scaling/valkey plan -destroy -input=false -out=data-scaling-valkey-destroy.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/valkey show -no-color data-scaling-valkey-destroy.tfplan \
+     > "$SVP_LAB_SESSION_DIR/data-scaling-valkey-destroy-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/data-scaling-valkey-destroy-plan.txt"
+   ```
+
+   Đọc `data-scaling-valkey-destroy-plan.txt` trong thư mục buổi; đúng như mong đợi (dưới) thì sang khối sau, apply đúng file plan đã đọc:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=data-scaling/valkey apply -input=false data-scaling-valkey-destroy.tfplan \
+     && rm data-scaling/valkey/data-scaling-valkey-destroy.tfplan
+   ```
+
+   - Mong đợi, dán lại: `Plan: 0 to add, 0 to change, N to destroy.` với N bằng số `to add` của bước 3, rồi
+     `Destroy complete!`.
+
+3. **Quét sót**, chỉ đọc.
 
    ```sh
    data-scaling/scripts/sweep.sh
    ```
 
-3. RDS Proxy tự tạo log group `/aws/rds/proxy/…` mà destroy không xoá; sweep in tên nó dưới dòng `LEFT` của mục log
-   group. Xoá đúng tên in ra, rồi chạy lại bước 2.
+   - Mong đợi, dán lại: mọi dòng `none` và `sweep: nothing left`.
+   - Bẫy: dòng `ERROR` là một danh sách không đọc được (thường do phiên đăng nhập của profile hết hạn): đăng nhập lại
+     rồi quét lại. Có dòng `LEFT` thì xoá thứ đó rồi quét lại.
+
+4. **Xoá log group của RDS Proxy.** Proxy tự tạo log group `/aws/rds/proxy/…` mà gỡ root không xoá; sweep in tên nó
+   dưới dòng `LEFT` của mục log group. Xoá đúng tên in ra, rồi quét lại.
 
    ```sh
    AWS_PROFILE=anhnv-stg aws logs delete-log-group --log-group-name '<tên log group sweep in ra>' --region ap-southeast-1
+   data-scaling/scripts/sweep.sh
    ```
 
-4. Xoá state local và plan. State không giữ mật khẩu (write-only) nhưng giữ account ID, ARN, endpoint và IP. File
-   `*.auto.tfvars` chỉ giữ biến bật tắt, `shards`, `password_version`, gitignore; giữ hay xoá đều được.
+   - Mong đợi, dán lại: `sweep: nothing left`.
+
+5. **Xoá state local, file plan còn sót và thư mục buổi.** State không giữ mật khẩu (write-only) nhưng giữ account ID,
+   ARN, endpoint và IP; thư mục buổi giữ bản văn bản của plan. Xoá thư mục buổi sau khi đã chép số đo của mục
+   [Sau buổi](#sau-buổi). File `*.auto.tfvars` chỉ giữ biến bật tắt, `shards`, `password_version`, gitignore; giữ hay
+   xoá đều được.
 
    ```sh
    rm -f data-scaling/postgres/terraform.tfstate data-scaling/postgres/terraform.tfstate.backup \
-     data-scaling/postgres/tfplan data-scaling/valkey/terraform.tfstate data-scaling/valkey/terraform.tfstate.backup \
-     data-scaling/valkey/tfplan
+     data-scaling/postgres/*.tfplan data-scaling/valkey/terraform.tfstate \
+     data-scaling/valkey/terraform.tfstate.backup data-scaling/valkey/*.tfplan
+   rm -rf "$SVP_LAB_SESSION_DIR"
    ```
 
-## Đề SAP
+   - Bẫy: sweep chưa in `sweep: nothing left` thì chưa xoá state.
 
-Theo exam guide SAP-C03 [N31]:
+## Sau buổi
 
-- Task 1.5 Design data, storage, and database architectures: skill 1.5.3 (chọn RDS hay Aurora theo cách truy cập, nhất
-  quán, mở rộng), 1.5.4 (read replica, Multi-AZ; Global Database và global tables ở trang giấy), 1.5.6 (chiến lược cache
-  với ElastiCache; DAX ở trang giấy).
-- Task 2.2 Design solutions to implement encryption and key management strategies: skill 2.2.2 (TLS với quản lý chứng
-  chỉ: CA của RDS, chứng chỉ ACM của RDS Proxy, TLS bắt buộc của Valkey).
-- Task 3.1 Design architectures based on AWS pricing models: skill 3.1.2 (instance Graviton), giá RDS Proxy theo vCPU.
-- Task 3.2 Optimize data transfer and network costs: skill 3.2.2 (chuyển dữ liệu giữa AZ của loader, replica, cache).
-- Task 3.4 Optimize storage and database costs: skill 3.4.3 (Aurora Serverless, I/O-Optimized ở trang giấy; node so với
-  Serverless của ElastiCache).
-- Task 4.3 Design solutions to meet business continuity and resiliency requirements: skill 4.3.2 (thử failover và đo
-  thời gian phục hồi), 4.3.3 (dư thừa, chịu lỗi qua AZ).
-- Task 5.3 Design observability and monitoring solutions: skill 5.3.1 (metric CloudWatch của replica lag và kết nối).
+Ghi lại, từ output đã dán:
+
+- Phần `postgres/`: độ trễ replica và metric (bước 10), p95 đọc (bước 11), cửa sổ lỗi và số lần lỗi của failover Aurora
+  qua writer endpoint, proxy và instance endpoint (bước 12), của reboot có failover RDS (bước 13), số kết nối của hai
+  burst (bước 14), số giao dịch lỗi của tải (bước 15).
+- Phần `valkey/`: output `client` (bước 8), thông lượng nền (bước 9), thời gian reshard, cửa sổ lỗi và thông lượng
+  trong lúc reshard, failover `cmd` (bước 10), failover `cme` (bước 11).
+- Phần local: bảng kết quả của `partition.sh`.
+- Thời gian thật của dựng, đo và gỡ mỗi phần, thay số ước tính ở bảng đầu trang và [Chi phí](#chi-phí); phí thật
+  của buổi trên Cost Explorer khi số đã cập nhật, so với [Chi phí](#chi-phí).
+
+Kết luận vào ADR mới của `svp-backend`, đầu vào để quyết lại
+[ADR-0057](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0057-postgres17-verify-full.md) §5, §7 (một RDS
+instance, không proxy) và [ADR-0053](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0053-msk-elasticache-valkey.md)
+§7 (Valkey cluster mode tắt). README này không viết kết luận trước buổi.
+
+## Ôn SAP-C03
+
+Task statement của exam guide SAP-C03 [N31] mà bài phục vụ:
+
+- 1.5 Design data, storage, and database architectures (skill 1.5.3, 1.5.4, 1.5.6): chọn Aurora hay RDS theo cách đọc,
+  nhất quán, mở rộng; read replica, Multi-AZ (Global Database, global tables ở trang giấy); cache bằng ElastiCache (DAX
+  ở trang giấy).
+- 2.2 Design solutions to implement encryption and key management strategies (skill 2.2.2): TLS với CA của RDS, chứng
+  chỉ ACM của RDS Proxy, TLS bắt buộc của Valkey.
+- 3.1 Design architectures based on AWS pricing models (skill 3.1.2): instance Graviton, giá RDS Proxy theo vCPU.
+- 3.2 Optimize data transfer and network costs (skill 3.2.2): chuyển dữ liệu giữa AZ của loader, replica, cache.
+- 3.4 Optimize storage and database costs (skill 3.4.3): Aurora Serverless, I/O-Optimized ở trang giấy; node so với
+  Serverless của ElastiCache.
+- 4.3 Design solutions to meet business continuity and resiliency requirements (skill 4.3.2, 4.3.3): thử failover và đo
+  thời gian phục hồi; dư thừa, chịu lỗi qua AZ.
+- 5.3 Design observability and monitoring solutions (skill 5.3.1): metric CloudWatch của độ trễ replica và kết nối.
+
+### 1. Đọc nhiều, failover ngắn: Aurora hay RDS Multi-AZ (task 1.5)
+
+Một ứng dụng chạy RDS for PostgreSQL Multi-AZ một standby; đọc gấp nhiều lần ghi, CPU của instance chính chạm trần giờ
+cao điểm. Yêu cầu: thêm sức đọc ở AZ khác với độ trễ sao chép dưới một giây, và khi instance chính hỏng thì ghi trở lại
+trong khoảng một phút, tự động. Giữ PostgreSQL. Chọn cách nào?
+
+- A. Thêm read replica RDS ở AZ khác, giữ Multi-AZ một standby.
+- B. Chuyển sang Aurora PostgreSQL, một Aurora Replica ở AZ khác, client đọc qua reader endpoint.
+- C. Cho client đọc từ standby của Multi-AZ.
+- D. Đặt ElastiCache trước database, giữ nguyên RDS.
+
+**Đáp án:** B. Aurora Replica đọc chung cluster volume, độ trễ thường dưới 100 ms [N2]; khi writer hỏng, Aurora tự
+nâng một replica lên writer, thường dưới 60 s, hay dưới 30 s [N1].
+
+**Vì sao không phải:**
+
+- A: replica RDS sao chép bất đồng bộ, AWS không công bố độ trễ; failover vẫn qua standby, thường 60–120 s [N3].
+- C: standby của Multi-AZ một standby không nhận đọc [N4].
+- D: cache bớt tải đọc nhưng không đổi thời gian failover, và trả dữ liệu cũ tới khi hết hạn.
+
+**Trong lab:** bước 10 (độ trễ replica), 12, 13 (failover) của [phần `postgres/`](#phần-postgres-câu-1-2-4).
+
+### 2. Burst kết nối từ Lambda và failover qua proxy (task 4.3)
+
+Một API trên Lambda ghi vào Aurora PostgreSQL. Lúc cao điểm, hàng nghìn lần gọi đồng thời mở kết nối mới; database chạm
+`max_connections` và tốn CPU cho bắt tay TLS. Đội muốn bớt kết nối tới database và rút ngắn thời gian client lỗi khi
+failover, không đổi code ngoài chuỗi kết nối. Chọn cách nào?
+
+- A. Nâng lớp instance Aurora để có `max_connections` lớn hơn.
+- B. Đặt RDS Proxy trước cluster; Lambda nối endpoint của proxy.
+- C. Cho Lambda nối reader endpoint.
+- D. Tự dựng PgBouncer trên một EC2 instance.
+
+**Đáp án:** B. Proxy giữ pool kết nối tới database và dùng lại cho các client, gánh phần mở kết nối TLS thay database;
+khi failover, proxy nhận kết nối ở cùng địa chỉ và chuyển tới writer mới, client không chịu trễ DNS [N7]. AWS ghi thời
+gian failover qua proxy giảm tới 66 % [N35].
+
+**Vì sao không phải:**
+
+- A: tốn thêm tiền mà mỗi lần gọi vẫn mở kết nối mới; failover không ngắn hơn.
+- C: reader endpoint chỉ đọc, câu ghi lỗi.
+- D: một EC2 là điểm hỏng đơn, phải tự vận hành và tự theo dõi writer mới khi failover.
+
+**Trong lab:** bước 12 (probe qua proxy cạnh writer endpoint) và 14 (burst) của
+[phần `postgres/`](#phần-postgres-câu-1-2-4).
+
+### 3. Cache vượt một node: cluster mode (task 1.5)
+
+Một cache ElastiCache for Valkey chạy cluster mode tắt: một primary, hai replica. Dữ liệu sắp vượt bộ nhớ của node lớn
+nhất mà ngân sách cho phép, và tải ghi đã làm primary nghẽn. Cần thêm cả bộ nhớ lẫn sức ghi, và thêm tiếp về sau mà
+không dừng dịch vụ. Chọn cách nào?
+
+- A. Thêm replica tới mức tối đa.
+- B. Bật cluster mode, đổi client sang client cluster, rồi thêm shard bằng reshard online.
+- C. Nâng node lên lớp lớn hơn.
+- D. Đặt DynamoDB Accelerator (DAX) trước cache.
+
+**Đáp án:** B. Cluster mode bật chia dữ liệu qua nhiều shard, mỗi shard một primary nhận ghi, tới 500 node group
+[N20]; thêm bớt shard online được [N22]. Cái giá: client phải là client cluster, lệnh nhiều khoá chỉ chạy khi mọi khoá
+cùng slot (hash tag) [N32].
+
+**Vì sao không phải:**
+
+- A: replica chỉ thêm sức đọc, tối đa 5 replica; không thêm bộ nhớ hay sức ghi [N20].
+- C: một shard vẫn phải chứa toàn bộ dữ liệu trên một node [N20]; trần là node lớn nhất, vượt ngân sách.
+- D: DAX là cache của DynamoDB, không đứng trước Valkey.
+
+**Trong lab:** bước 8 (client thấy gì) và 10 (reshard trong lúc có tải) của [phần `valkey/`](#phần-valkey-câu-3).
+
+### 4. Đọc ngay sau ghi trên replica (task 1.5)
+
+Một ứng dụng chia đọc ghi: ghi vào writer endpoint của Aurora PostgreSQL, mọi câu đọc vào reader endpoint. Người dùng
+báo vừa thích một video, tải lại trang thì chưa thấy lượt thích của mình; người khác thấy chậm vài trăm mili giây thì
+chấp nhận được. Cách sửa nào ít tốn nhất?
+
+- A. Thêm Aurora Replica.
+- B. Câu đọc ngay sau câu ghi của chính người dùng đi writer endpoint; câu đọc khác giữ ở reader endpoint.
+- C. Chuyển mọi câu đọc về writer endpoint.
+- D. Đặt ElastiCache trước reader endpoint.
+
+**Đáp án:** B. Aurora Replica nhận thay đổi bất đồng bộ, độ trễ thường dưới 100 ms nhưng khác 0 [N2]; chỉ câu đọc cần
+thấy ghi của chính mình phải đọc writer.
+
+**Vì sao không phải:**
+
+- A: thêm sức đọc, không đưa độ trễ về 0.
+- C: sửa được nhưng dồn mọi câu đọc lên writer, mất phần sức đọc của reader.
+- D: cache thêm một tầng dữ liệu cũ, người dùng càng chậm thấy lượt thích của mình.
+
+**Trong lab:** bước 10, 11 của [phần `postgres/`](#phần-postgres-câu-1-2-4); pool `read` của engagement-service ở
+[Thiết kế](#thiết-kế).
+
+### 5. Aurora Standard hay I/O-Optimized (task 3.4)
+
+Hoá đơn tháng của một cluster Aurora PostgreSQL: instance 70 %, storage 10 %, I/O 20 %. Đội hỏi có nên đổi cấu hình
+storage để giảm chi phí. Chọn cách nào?
+
+- A. Chuyển sang Aurora I/O-Optimized ngay.
+- B. Giữ Aurora Standard; xem lại khi I/O chiếm từ 25 % tổng chi Aurora.
+- C. Chuyển sang RDS for PostgreSQL gp3 để bỏ phí I/O.
+- D. Đổi qua lại giữa Standard và I/O-Optimized mỗi tuần theo tải.
+
+**Đáp án:** B. I/O-Optimized không tính I/O nhưng giá instance và storage cao hơn; AWS ghi nó giảm chi phí khi I/O từ
+25 % tổng chi Aurora, dưới mức đó Standard thường rẻ hơn [N36].
+
+**Vì sao không phải:**
+
+- A: 20 % dưới ngưỡng; phần instance, storage tăng giá lớn hơn phần I/O bỏ được [N36].
+- C: đổi engine là quyết định kiến trúc (mất Aurora Replica, failover của Aurora), không phải chỉnh storage.
+- D: từ Standard sang I/O-Optimized chỉ đổi được mỗi 30 ngày một lần [N36].
+
+**Trong lab:** [Chi phí](#chi-phí) đặt trần I/O của buổi ở 0,22 USD, cạnh 2 × 0,228 USD của hai instance trong hai
+giờ; tỉ lệ thật đọc trên Cost Explorer sau buổi ([Sau buổi](#sau-buổi)). Điểm hoà vốn ở
+[`docs/data-tier-options.md`](docs/data-tier-options.md#aurora-io-optimized-so-với-standard).
 
 ## Kiểm offline
 
@@ -689,6 +1016,8 @@ make tf-check DIRS=data-scaling
 make shellcheck DIRS=data-scaling
 make script-test DIRS=data-scaling
 make docs-check DOCS='data-scaling/**/*.md'
+make diagrams-check NAMES=data-scaling
+make inventory-check
 make lock DIRS=data-scaling/postgres  # only when the root changes its providers
 make lock DIRS=data-scaling/valkey  # only when the root changes its providers
 ```
@@ -723,6 +1052,8 @@ make lock DIRS=data-scaling/valkey  # only when the root changes its providers
 - `partition/`: SQL của phần local: `schema.sql`, `load.sql`, `read.sql`, `write.sql`, `prune-delete.sql`,
   `prune-detach.sql`, `explain.sql`.
 - `docs/data-tier-options.md`: trang giấy.
+- `docs/inventory.md`: tài nguyên mỗi root tạo trên account trống, sinh bằng `make inventory`.
+- `../docs/diagrams/data-scaling/`: nguồn D2 và SVG của ba sơ đồ ở [Thiết kế](#thiết-kế).
 - Tên và tag mà script tra cứu: tag `Lab = data-scaling`, tiền tố `svp-lab-ds-`; loader `svp-lab-ds-pg-loader`,
   `svp-lab-ds-kv-loader`; cluster `svp-lab-ds-aurora`, instance `svp-lab-ds-aurora-1`, `svp-lab-ds-aurora-2`,
   `svp-lab-ds-rds`, `svp-lab-ds-rds-replica`; proxy `svp-lab-ds-proxy`; replication group `svp-lab-ds-cme`,
@@ -815,6 +1146,9 @@ Tài liệu AWS đọc 2026-11-18, trừ dòng ghi ngày khác.
   <https://github.com/valkey-io/valkey/blob/9.0.7/src/valkey-benchmark.c>
 - [N35] Amazon RDS Proxy, trang sản phẩm (thời gian failover của Aurora và RDS giảm tới 66 %):
   <https://aws.amazon.com/rds/proxy/>
+- [N36] Amazon Aurora, Amazon Aurora storage (I/O-Optimized giảm chi phí khi I/O từ 25 % tổng chi Aurora; từ Standard
+  sang I/O-Optimized mỗi 30 ngày một lần), đọc 2026-11-22:
+  <https://docs.aws.amazon.com/AmazonRDS/latest/AuroraUserGuide/Aurora.Overview.StorageReliability.html>
 
 Giá đọc 2026-11-18 (file Price List bulk công khai, bản 2026-11-13 của AmazonRDS, và trang giá):
 

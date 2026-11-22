@@ -53,6 +53,7 @@ run "replica" {
   variables {
     name                   = "svp-lab-dr-replica"
     replicate_source_db    = "arn:aws:rds:ap-southeast-1:000000000000:db:svp-lab-dr-primary"
+    replicate_backups      = true
     replicate_backups_from = "arn:aws:rds:ap-southeast-1:000000000000:db:svp-lab-dr-primary"
     kms_key_arn            = "arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000"
     password_version       = null
@@ -79,6 +80,31 @@ run "replica" {
   }
 }
 
+run "backups_off_replicates_nothing" {
+  command = plan
+
+  variables {
+    replicate_backups      = false
+    replicate_backups_from = "arn:aws:rds:ap-southeast-1:000000000000:db:svp-lab-dr-primary"
+  }
+
+  assert {
+    condition     = length(aws_db_instance_automated_backups_replication.this) == 0
+    error_message = "With replicate_backups off nothing is replicated, whatever replicate_backups_from holds."
+  }
+}
+
+run "backups_on_without_arn" {
+  command = plan
+
+  variables {
+    replicate_backups = true
+    kms_key_arn       = "arn:aws:kms:us-east-1:000000000000:key/00000000-0000-0000-0000-000000000000"
+  }
+
+  expect_failures = [var.replicate_backups_from]
+}
+
 run "replica_without_key" {
   command = plan
 
@@ -94,6 +120,7 @@ run "replicated_backups_without_key" {
   command = plan
 
   variables {
+    replicate_backups      = true
     replicate_backups_from = "arn:aws:rds:ap-southeast-1:000000000000:db:svp-lab-dr-primary"
   }
 

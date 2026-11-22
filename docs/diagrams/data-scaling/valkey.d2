@@ -1,0 +1,194 @@
+# The valkey root of data-scaling: the loader in the public subnet is the only client of the two replication groups,
+# cluster mode on (svp-lab-ds-cme) and off (svp-lab-ds-cmd), of the same engine, node type and user; the learner drives
+# it through SSM and reshards or fails over through the ElastiCache API. Same frame as postgres.d2.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Root valkey: loader đo Valkey cluster mode bật và tắt qua những đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 3
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  head: "" {
+    grid-rows: 1
+    grid-columns: 2
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    lsp: "" {width: 40; style: {stroke: transparent; fill: transparent}}
+    learner: "Máy người học" {
+      class: workload
+      height: 110
+      grid-rows: 2
+      grid-gap: 6
+      s: "kv-session.sh: Run Command, reshard,\ntest-failover, sự kiện qua API ElastiCache" {class: sub}
+      r: "data-scaling/scripts" {class: root}
+    }
+  }
+  vgap: "" {height: 60; style: {stroke: transparent; fill: transparent}}
+
+  acct: "account svp-stg (profile anhnv-stg)" {
+    class: account
+    label.near: bottom-right
+
+    aps1: "ap-southeast-1" {
+      class: region
+      label.near: top-right
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 0
+
+      c1: "" {
+        grid-rows: 3
+        grid-columns: 1
+        grid-gap: 0
+        style: {stroke: transparent; fill: transparent}
+        ssm: "Điều khiển loader" {
+          class: workload
+          height: 130
+          grid-rows: 1
+          grid-columns: 2
+          grid-gap: 16
+          i: "Systems Manager" {
+            shape: image
+            icon: ../icons/systems-manager.svg
+            width: 48
+            height: 48
+            style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+          }
+          t: "" {
+            grid-rows: 2
+            grid-gap: 6
+            style: {stroke: transparent; fill: transparent}
+            s: "Run Command\nAWS-RunShellScript" {class: sub}
+            r: "modules/loader" {class: root}
+          }
+        }
+        sp3: "" {height: 40; style: {stroke: transparent; fill: transparent}}
+        secret: "Mật khẩu user Valkey" {
+          class: prevention
+          height: 130
+          grid-rows: 1
+          grid-columns: 2
+          grid-gap: 16
+          i: "Secrets Manager" {
+            shape: image
+            icon: ../icons/secrets-manager.svg
+            width: 48
+            height: 48
+            style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+          }
+          t: "" {
+            grid-rows: 2
+            grid-gap: 6
+            style: {stroke: transparent; fill: transparent}
+            s: "svp-lab-ds-kv-app\nghi write-only" {class: sub}
+            r: "modules/valkey" {class: root}
+          }
+        }
+      }
+      g1: "" {width: 90; style: {stroke: transparent; fill: transparent}}
+
+      vpc: "VPC svp-lab-ds-kv 10.67.16.0/20 · subnet data 10.67.17.0/24 (AZ 1),\n10.67.18.0/24 (AZ 2), không route ra Internet" {
+        class: region
+        label.near: bottom-left
+        grid-rows: 1
+        grid-columns: 4
+        grid-gap: 0
+
+        c2: "" {
+          grid-rows: 3
+          grid-columns: 1
+          grid-gap: 0
+          style: {stroke: transparent; fill: transparent}
+          sp1: "" {height: 85; style: {stroke: transparent; fill: transparent}}
+          loader: "Loader" {
+            class: workload
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "EC2" {
+              shape: image
+              icon: ../icons/ec2.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-kv-loader\nt4g.small · kv.sh, valkey-benchmark\nsubnet public 10.67.16.0/24" {class: sub}
+              r: "modules/loader" {class: root}
+            }
+          }
+          sp2: "" {height: 85; style: {stroke: transparent; fill: transparent}}
+        }
+        g2: "" {width: 130; style: {stroke: transparent; fill: transparent}}
+
+        c3: "" {
+          grid-rows: 2
+          grid-columns: 1
+          grid-gap: 40
+          style: {stroke: transparent; fill: transparent}
+          cme: "Cluster mode bật · biến shards" {
+            class: data
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "ElastiCache" {
+              shape: image
+              icon: ../icons/elasticache.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-cme · 2 shard mặc định\nmỗi shard primary, replica ở AZ khác" {class: sub}
+              r: "modules/valkey" {class: root}
+            }
+          }
+          cmd: "Cluster mode tắt" {
+            class: data
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "ElastiCache" {
+              shape: image
+              icon: ../icons/elasticache.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-cmd · một shard\nprimary, replica ở AZ khác" {class: sub}
+              r: "modules/valkey" {class: root}
+            }
+          }
+        }
+        g3: "" {width: 20; style: {stroke: transparent; fill: transparent}}
+      }
+    }
+  }
+}
+
+all.head.learner -> all.acct.aps1.c1.ssm: "Run Command" {class: control-flow}
+all.acct.aps1.c1.ssm -> all.acct.aps1.vpc.c2.loader: "chạy kv.sh" {class: control-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.c1.secret: "GetSecretValue" {class: control-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.cme: "6379 TLS · configuration\nendpoint, client cluster" {class: data-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.cmd: "6379 TLS ·\nprimary endpoint" {class: data-flow}

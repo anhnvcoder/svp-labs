@@ -1,11 +1,17 @@
 # multi-account-networking
 
-Bài lab mạng nhiều account của svp: account `svp-network` giữ Transit Gateway nối VPC của `svp-network`, `svp-stg`,
-`svp-prd`, tách prd khỏi non-prd, cho một lối ra Internet chung qua một NAT Gateway, chia sẻ subnet và DNS riêng qua AWS
-RAM. Code sẵn cho buổi người học chạy; mọi lệnh chạm AWS ở mục [Chạy buổi](#chạy-buổi) do người học chạy. Phần so sánh
-Direct Connect và Cloud WAN ở [`docs/direct-connect-cloud-wan.md`](docs/direct-connect-cloud-wan.md). Phần hybrid
-(root `hybrid/`) thêm một site on-prem mô phỏng nối Transit Gateway qua Site-to-Site VPN, DNS hai chiều qua Route 53
-Resolver, và PrivateLink từ prd sang stg.
+Bài lab dựng mạng nhiều account của svp: account `svp-network` giữ Transit Gateway nối VPC của `svp-network`, `svp-stg`,
+`svp-prd`, tách prd khỏi non-prd, cho một lối ra Internet chung qua một NAT Gateway, chia sẻ subnet và DNS riêng qua AWS RAM.
+Phần hybrid thêm một site on-prem mô phỏng nối Transit Gateway qua Site-to-Site VPN, DNS hai chiều qua Route 53 Resolver, và
+PrivateLink cho stg gọi một dịch vụ của prd. Bài đo cái giá và cái được của mô hình hub, để có số khi svp cần quyết lại cách nối VPC;
+Direct Connect và Cloud WAN chỉ so trên giấy ở [`docs/direct-connect-cloud-wan.md`](docs/direct-connect-cloud-wan.md).
+
+| | |
+| --- | --- |
+| Dựng | Root `account` một lần; mỗi buổi `core` (Transit Gateway, bốn VPC, NAT, DNS) rồi `hybrid` (VPN, Resolver, PrivateLink) |
+| Trả lời | prd tách non-prd thật không; NAT, DNS dùng chung thế nào; on-prem và PrivateLink tới được env nào |
+| Phí | [~$1,12 mỗi giờ lõi, ~$1,80 cả hybrid; buổi 3 giờ ~$3,97 lõi, ~$6,2 cả hybrid](#chi-phí); account để không ~$2,2 mỗi tháng |
+| Thời gian | Ước tính, chưa đo: dựng ~30 phút, đo ~2 giờ, gỡ ~30 phút; một buổi ~3 giờ ([cách tính](#chi-phí)) |
 
 ## Câu hỏi
 
@@ -24,38 +30,15 @@ giá và cái được của mô hình hub khi số VPC, account hay đường h
 
 ## Thiết kế
 
-```mermaid
-flowchart LR
-  subgraph mgmt["management (anhnv-sso)"]
-    ORG["RAM: chia sẻ trong org<br/>trusted access Reachability Analyzer"]
-  end
-  subgraph net["svp-network (OU Infrastructure)"]
-    TGW["TGW svp-lab-net<br/>rt-prd, rt-nonprd, rt-egress"]
-    subgraph egress["VPC svp-lab-net-egress 10.64.0.0/20"]
-      PE["probe-egress"]
-      NAT["NAT Gateway + EIP"]
-      IGW["Internet gateway"]
-    end
-    subgraph shared["VPC svp-lab-net-shared 10.64.16.0/20"]
-      PS["probe-shared (của stg, subnet chia sẻ)"]
-    end
-    DNS["PHZ net.svp.example, nonprd.svp.example<br/>Route 53 Profile svp-lab-net"]
-  end
-  subgraph stg["svp-stg"]
-    VS["VPC svp-lab-net-stg 10.64.32.0/20<br/>probe-stg"]
-  end
-  subgraph prd["svp-prd"]
-    VP["VPC svp-lab-net-prd 10.64.48.0/20<br/>probe-prd"]
-  end
-  VS ---|"rt-nonprd"| TGW
-  shared ---|"rt-nonprd"| TGW
-  VP ---|"rt-prd"| TGW
-  egress ---|"rt-egress"| TGW
-  NAT --> IGW --> INET(("Internet"))
-  DNS -.->|"Profile qua RAM"| VS
-  DNS -.->|"Profile qua RAM"| VP
-  DNS -.->|"authorization + association"| VS
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/multi-account-networking/overview-dark.svg">
+  <img src="../docs/diagrams/multi-account-networking/overview.svg"
+    alt="Bốn account nối nhau qua Transit Gateway thế nào, và prd tách non-prd ở đâu?">
+</picture>
+
+Mỗi khối ghi root và module Terraform dựng nó; route table, egress và DNS của lõi ở sơ đồ của mục
+[Transit Gateway và route table](#transit-gateway-và-route-table), phần hybrid ở sơ đồ của mục
+[Phần hybrid](#phần-hybrid-on-prem-mô-phỏng-vpn-dns-hai-chiều-privatelink).
 
 Đường đi của một gói stg → Internet và đường về:
 
@@ -114,6 +97,12 @@ Khi hai công tắc bật, plan của [`aws/org`](https://github.com/anhnvcoder/
 sách đó là toàn bộ): không apply `aws/org` cho tới khi bài tắt chúng. Đưa chúng lên đường chính cần ADR riêng.
 
 ### Transit Gateway và route table
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/multi-account-networking/core-dark.svg">
+  <img src="../docs/diagrams/multi-account-networking/core.svg"
+    alt="Route table nào đưa gói của mỗi VPC đi đâu, và zone riêng nào tới VPC nào?">
+</picture>
 
 - Một Transit Gateway ở `svp-network`: không bảng mặc định (`default_route_table_association`,
   `default_route_table_propagation` tắt), nên không attachment nào tự vào bảng chung; `auto_accept_shared_attachments`
@@ -219,38 +208,11 @@ riêng của `svp-infra`.
 Root `hybrid/` dựng trên root `core/`, tra tài nguyên của `core/` bằng data source theo tên và tag ở mục
 [Tham chiếu](#tham-chiếu), không đọc state của nó.
 
-```mermaid
-flowchart LR
-  subgraph net["svp-network"]
-    subgraph onprem["VPC svp-lab-net-onprem 192.168.0.0/20 (on-prem mô phỏng, không gắn TGW)"]
-      R["router 192.168.0.10<br/>Libreswan + BIND, EIP<br/>zone onprem.svp.example"]
-      H["host 192.168.1.10"]
-    end
-    VPN["Site-to-Site VPN svp-lab-net-vpn<br/>hai tunnel, định tuyến tĩnh"]
-    TGW["TGW svp-lab-net<br/>rt-nonprd: 192.168.0.0/20 tới VPN<br/>rt-prd: 192.168.0.0/20 blackhole"]
-    subgraph shared["VPC svp-lab-net-shared"]
-      RES["subnet svp-lab-net-resolver 10.64.18.0/28<br/>Resolver inbound .4 .5, outbound .6 .7"]
-    end
-    PRF["Route 53 Profile svp-lab-net<br/>thêm rule onprem.svp.example"]
-  end
-  subgraph stg["svp-stg"]
-    PS["probe-stg"]
-    EP["interface endpoint svp-lab-net-svc-stg"]
-  end
-  subgraph prd["svp-prd"]
-    NLB["NLB svp-lab-net-svc<br/>endpoint service"]
-    PP["probe-prd, HTTP cổng 80"]
-  end
-  H -->|"route 10.64.0.0/16"| R
-  R ==>|"IPsec qua Internet"| VPN
-  VPN ---|"attachment VPN, rt-nonprd"| TGW
-  TGW ---|"rt-nonprd"| shared
-  TGW ---|"rt-nonprd"| PS
-  RES -.->|"forward tới 192.168.0.10"| R
-  PRF -.->|"Profile qua RAM"| PS
-  EP ==>|"PrivateLink"| NLB
-  NLB --> PP
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/multi-account-networking/hybrid-dark.svg">
+  <img src="../docs/diagrams/multi-account-networking/hybrid.svg"
+    alt="On-prem tới được gì qua VPN, DNS đi hai chiều ra sao, và stg gọi prd bằng đường nào?">
+</picture>
 
 Truy vấn DNS từ on-prem tới private hosted zone của bài:
 
@@ -325,7 +287,7 @@ sequenceDiagram
   Không cổng 22, không gì khác từ Internet.
 - **Giới hạn của mô phỏng:** một router là một điểm hỏng; không BGP nên không tự chuyển tunnel; không kẹp MSS (truyền
   TCP lớn qua tunnel có thể kẹt, bài chỉ dùng ping, DNS và `curl` nhỏ); cấu hình VTI, route chỉ chạy một lần lúc khởi
-  động, khởi động lại router thì mất (thay instance bằng `terraform apply -replace` của `hybrid`).
+  động, khởi động lại router thì mất (thay instance theo bẫy của bước 8, `-replace=module.site.aws_instance.router`).
 
 #### DNS hai chiều
 
@@ -415,6 +377,18 @@ Phần hybrid (bước 7 tới 12 của mục [Chạy buổi](#chạy-buổi)):
 - **Chi phí mỗi giờ phần hybrid.** USD theo usage type của ngày buổi. Đo: Cost Explorer ngày sau buổi (bước 12). Mong
   đợi: gần bảng hybrid của mục [Chi phí](#chi-phí).
 
+## Tài nguyên
+
+Mỗi root một dòng; số tài nguyên theo phần và theo loại, cùng sơ đồ, ở trang [inventory](docs/inventory.md), sinh từ plan trên provider
+giả.
+
+- [`account`](docs/inventory.md#multi-account-networkingaccount): OU `Infrastructure` và account `svp-network`, chạy từ management
+  một lần (bước 0); account sống qua các buổi.
+- [`core`](docs/inventory.md#multi-account-networkingcore): chia sẻ RAM trong org, Transit Gateway và route table, bốn VPC, NAT
+  Gateway, share RAM, instance thử, private hosted zone và Route 53 Profile; dựng mỗi buổi (bước 3).
+- [`hybrid`](docs/inventory.md#multi-account-networkinghybrid): on-prem mô phỏng, Site-to-Site VPN, Resolver endpoint, PrivateLink;
+  dựng sau `core` trong cùng buổi (bước 7), tra tài nguyên của `core` theo tên.
+
 ## Chi phí
 
 Region `ap-southeast-1`, USD, on-demand; Free Tier không tính. Buổi lõi 3 giờ. Nguồn là file Price List công khai của
@@ -468,6 +442,12 @@ Resolver chiếm ba phần tư phí mỗi giờ của phần hybrid; gắn rule 
 theo association với VPC [N19], [P3].
 **Một buổi lõi cộng hybrid 3 giờ: ~$6,2** (lõi ~$3,97 + 3 × 0,68 + 0,20).
 
+**Lõi cộng hybrid mỗi giờ: ~$1,80** (1,12 + 0,68).
+
+**Thời gian, ước tính, chưa đo:** dựng `core` và `hybrid` ~30 phút (mỗi root một lượt plan, đọc, apply; bước 8 chờ tunnel tới 10
+phút), đo bước 4 tới 12 ~2 giờ, gỡ và quét sót ~30 phút: cộng ~3 giờ, đúng số giờ các bảng trên tính. Buổi đầu thêm bước 0 (tạo
+account). Mục [Sau buổi](#sau-buổi) thay số ước tính bằng số đo.
+
 Phí của `svp-network` để không mỗi tháng (không buổi nào chạy), ước theo cách của [phụ lục
 ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/0060-org-detection-logging.md) §12:
 
@@ -482,43 +462,73 @@ ADR-0060](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/appendix/
 Tháng đầu gần như $0: GuardDuty dùng thử 30 ngày cho account chưa từng bật [N20], check Security Hub miễn phí 30 ngày
 dùng thử [P6].
 
+## Điều kiện trước
+
+- [ ] **Code:** bản clone `svp-labs` ở `main`, sau khi PR của bài đã merge; mọi lệnh chạy từ gốc bản clone.
+- [ ] **Công cụ:** AWS CLI v2 kèm Session Manager plugin [N21], Terraform 1.15, `jq`.
+- [ ] **Profile:** `anhnv-sso` (management), `anhnv-stg`, `anhnv-prd` như ở `svp-infra`; `anhnv-network` thêm ở bước 0. Đăng nhập:
+  `aws sso login --profile anhnv-sso --region us-east-1`.
+- [ ] **Biến terminal:** `SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` như ở `svp-infra`;
+  `SVP_AWS_NETWORK_ACCOUNT_ID` từ bước 0.
+- [ ] **Không apply** [`aws/org`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/org) trong buổi (mục
+  [Truy cập dịch vụ trong org](#truy-cập-dịch-vụ-trong-org)).
+- [ ] **Lab chạy trước:** không có.
+- [ ] **Thư mục buổi**, đặt ở terminal của buổi, từ gốc repo:
+
+  ```sh
+  export SVP_LAB_SESSION_DIR="$PWD/.session/multi-account-networking-$(date -u +%Y%m%dT%H%M%SZ)" && mkdir -p "$SVP_LAB_SESSION_DIR"
+  ```
+
+  Bản văn bản của mọi plan ghi vào đây (git bỏ qua `.session/`). Terminal mới thì export lại đúng thư mục này, không tạo thư mục
+  mới giữa buổi ([lý do](../docs/terraform-commands.md#thư-mục-buổi)).
+
 ## Chạy buổi
 
-Người học chạy mọi lệnh dưới đây, từ gốc bản clone `svp-labs`, sau khi PR của bài đã merge (từ `main`). Cần AWS CLI v2
-kèm Session Manager plugin [N21], Terraform 1.15, `jq`; `aws sso login --profile anhnv-sso`; biến terminal
-`SVP_AWS_MGMT_ACCOUNT_ID`, `SVP_AWS_STG_ACCOUNT_ID`, `SVP_AWS_PRD_ACCOUNT_ID` như ở `svp-infra`, và
-`SVP_AWS_NETWORK_ACCOUNT_ID` (bước 0). Không apply
-[`aws/org`](https://github.com/anhnvcoder/svp-infra/tree/main/aws/org) trong buổi.
+Người học chạy mọi lệnh dưới đây; AI không chạy lệnh nào chạm AWS. Lệnh `terraform` theo khuôn của
+[`docs/terraform-commands.md`](../docs/terraform-commands.md): `plan -out`, `show` ra thư mục buổi, đọc, rồi `apply` đúng file plan
+đó; lý do từng phần và cách đọc plan ở trang đó. Bước nào khác mong đợi thì dừng, dán output, không đi tiếp.
 
 **0. Lần đầu: account `svp-network`.** Tạo account là bước gần như không đảo ngược (account đóng còn trong org tới 90
-ngày [N23]). Kiểm account của profile:
+ngày [N23]). Chép `account/account.auto.tfvars.example` thành `account.auto.tfvars` cùng thư mục (git bỏ qua), điền email chưa
+account AWS nào dùng, kể cả account đã đóng. Rồi plan:
+
+```sh
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account init -input=false
+
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/account plan -input=false -out=multi-account-networking-account.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account show -no-color multi-account-networking-account.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-account-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-account-plan.txt"
+```
+
+- **Mong đợi:** mỗi tài nguyên một dòng `will be created` (OU `Infrastructure`, account `svp-network`); dòng `Plan:` bằng dòng của
+  mục [`account`](docs/inventory.md#multi-account-networkingaccount) ở trang inventory.
+- **Bẫy:** khác thì dừng, dán các dòng `grep` in ra.
+
+Kiểm account ngay trước lệnh ghi:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text --region ap-southeast-1
 ```
 
-Số in ra phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID`; khác thì dừng. Chép `account/account.auto.tfvars.example` thành
-`account.auto.tfvars` cùng thư mục, điền email chưa account AWS nào dùng. Rồi:
+Số in ra phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID`; khác thì dừng. Rồi apply đúng file plan đã đọc:
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID terraform -chdir=multi-account-networking/account init
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID terraform -chdir=multi-account-networking/account \
-  plan -out=account.tfplan
-```
-
-Mong đợi `Plan: 2 to add, 0 to change, 0 to destroy` (OU `Infrastructure`, account `svp-network`). Dán plan lại nếu
-khác. Rồi:
-
-```sh
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID terraform -chdir=multi-account-networking/account \
-  apply account.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account apply -input=false multi-account-networking-account.tfplan \
+  && rm multi-account-networking/account/multi-account-networking-account.tfplan
 export SVP_AWS_NETWORK_ACCOUNT_ID="$(AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account \
   output -raw network_account_id)"
 echo "$SVP_AWS_NETWORK_ACCOUNT_ID"
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/account plan -input=false
 ```
 
-Dòng cuối là một id 12 số; đặt biến này ở mọi terminal của các buổi sau. Thêm profile của account mới vào
-`~/.aws/config` (một lần; chỉ dùng cho lệnh quét sót), thay `<id>` bằng id vừa in:
+- **Mong đợi:** `Apply complete!`, số `added` bằng `to add` của plan; `echo` in một id 12 số; plan cuối `No changes.`
+- **Việc tay:** đặt `SVP_AWS_NETWORK_ACCOUNT_ID` ở mọi terminal của các buổi sau. Thêm profile của account mới vào `~/.aws/config`
+  (một lần; chỉ dùng cho lệnh quét sót), thay `<id>` bằng id vừa in:
 
 ```ini
 [profile anhnv-network]
@@ -534,8 +544,9 @@ AWS_PROFILE=anhnv-stg aws ec2 describe-instance-type-offerings --location-type a
   --filters Name=instance-type,Values=t4g.nano --region ap-southeast-1 --query 'InstanceTypeOfferings[].Location' --output text
 ```
 
-Lệnh liệt kê các zone ID có loại instance đó [N22]. Không thấy `apse1-az1` thì thêm `TF_VAR_availability_zone_id=<zone
-ID có trong danh sách>` vào mọi lệnh Terraform của `core` trong buổi.
+Lệnh liệt kê các zone ID có loại instance đó [N22]. Không thấy `apse1-az1` thì thêm dòng
+`TF_VAR_availability_zone_id="<zone ID có trong danh sách>" \` dưới dòng `AWS_PROFILE=anhnv-sso \` của mọi lệnh `plan` của `core`
+và `hybrid` trong buổi; lệnh `apply` đọc giá trị từ file plan. Số tài nguyên không đổi theo zone.
 
 **2. Bật trusted access của Reachability Analyzer** (chia sẻ RAM bật ở bước 3, cùng apply):
 
@@ -552,24 +563,38 @@ thể mất vài phút [N5]. Dán lại output nếu thiếu.
 **3. Dựng `core`:**
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID \
-  TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID \
-  terraform -chdir=multi-account-networking/core init
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID \
-  TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID \
-  terraform -chdir=multi-account-networking/core plan -out=core.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core init -input=false
+
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/core plan -input=false -out=multi-account-networking-core.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core show -no-color multi-account-networking-core.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-core-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-core-plan.txt"
 ```
 
-Mong đợi `Plan: 128 to add, 0 to change, 0 to destroy`. Dừng và dán plan lại nếu có `change`, `destroy`, hay provider
-báo account không nằm trong `allowed_account_ids`. Rồi:
+- **Mong đợi:** mọi dòng `will be created`; dòng `Plan:` bằng dòng của mục
+  [`core`](docs/inventory.md#multi-account-networkingcore) ở trang inventory.
+- **Bẫy:** dừng và dán các dòng đó khi có `change`, `destroy`, hay provider báo account không nằm trong `allowed_account_ids`.
+
+Rồi apply đúng file plan đã đọc, và plan lại để kiểm:
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID \
-  TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID \
-  terraform -chdir=multi-account-networking/core apply core.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core apply -input=false multi-account-networking-core.tfplan \
+  && rm multi-account-networking/core/multi-account-networking-core.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/core plan -input=false
 ```
 
-Mong đợi `Apply complete! Resources: 128 added`. Ghi mốc giờ bắt đầu buổi (UTC) cho bước 6.
+- **Mong đợi:** `Apply complete!`, số `added` bằng `to add` của plan; plan cuối `No changes.`
+- **Việc tay:** ghi mốc giờ bắt đầu buổi (UTC) cho bước 6.
 
 **4. Reachability Analyzer** (sáu phân tích, ~$0,60):
 
@@ -626,7 +651,7 @@ Số in ra bằng `$SVP_AWS_NETWORK_ACCOUNT_ID`. Dán lại mọi output.
 
 **Khi mất phiên SSM:** SSM Agent ra Internet qua egress tập trung, nên route của TGW, VPC egress hay NAT hỏng thì phiên
 cũng hỏng. Control plane (Terraform, console) không đi qua đường đó: chạy `reachability.sh ... stg-to-internet` để thấy
-chỗ đứt, sửa bằng `terraform apply` của `core`. Cần vào instance khi egress còn hỏng thì thêm endpoint interface `ssm`,
+chỗ đứt, sửa code rồi plan, apply lại `core` như bước 3. Cần vào instance khi egress còn hỏng thì thêm endpoint interface `ssm`,
 `ssmmessages`, `ec2messages` vào VPC đó [N14] ($0,013 mỗi endpoint-giờ [P1] `APS1-VpcEndpoint-Hours`, ba endpoint ~$0,04
 mỗi giờ), gỡ khi xong.
 
@@ -645,29 +670,45 @@ cũng là `t4g.nano`).
 ### Phần hybrid
 
 Sau bước 5, cùng buổi, khi `core` còn sống: thứ tự dựng là `account` (một lần) → `core` → `hybrid`; mục
-[Dọn dẹp](#dọn-dẹp) gỡ `hybrid` trước `core`. Cùng các biến terminal; thêm `TF_VAR_availability_zone_id` như ở `core`
-nếu bước 1 đã đổi zone.
+[Dọn dẹp](#dọn-dẹp) gỡ `hybrid` trước `core`. Cùng các biến terminal và thư mục buổi; thêm dòng `TF_VAR_availability_zone_id`
+vào lệnh `plan` như ở `core` nếu bước 1 đã đổi zone.
 
 **7. Dựng `hybrid`:**
 
 ```sh
-AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-sso TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID \
-  TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID terraform -chdir=multi-account-networking/hybrid init
-AWS_PROFILE=anhnv-sso TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID \
-  TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID terraform -chdir=multi-account-networking/hybrid plan -out=hybrid.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/hybrid init -input=false
+
+AWS_PROFILE=anhnv-sso \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/hybrid plan -input=false -out=multi-account-networking-hybrid.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/hybrid show -no-color multi-account-networking-hybrid.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-hybrid-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-hybrid-plan.txt"
 ```
 
-Dòng đầu bằng `$SVP_AWS_MGMT_ACCOUNT_ID`. Mong đợi `Plan: 76 to add, 0 to change, 0 to destroy`; dừng và dán plan lại
-nếu có `change`, `destroy`, hay data source báo không tìm thấy tài nguyên của `core` (chưa dựng `core`, hay tên lệch mục
-[Tham chiếu](#tham-chiếu)). Rồi:
+- **Mong đợi:** mọi dòng `will be created`; dòng `Plan:` bằng dòng của mục
+  [`hybrid`](docs/inventory.md#multi-account-networkinghybrid) ở trang inventory.
+- **Bẫy:** dừng và dán các dòng đó khi có `change`, `destroy`, hay data source báo không tìm thấy tài nguyên của `core` (chưa dựng
+  `core`, hay tên lệch mục [Tham chiếu](#tham-chiếu)).
+
+Kiểm account rồi apply đúng file plan đã đọc, và plan lại để kiểm:
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID \
-  TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID terraform -chdir=multi-account-networking/hybrid apply hybrid.tfplan
+AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/hybrid apply -input=false multi-account-networking-hybrid.tfplan \
+  && rm multi-account-networking/hybrid/multi-account-networking-hybrid.tfplan
+AWS_PROFILE=anhnv-sso \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/hybrid plan -input=false
 ```
 
-Mong đợi `Apply complete! Resources: 76 added`. Ghi mốc giờ (UTC) cho bước 12.
+- **Mong đợi:** dòng đầu bằng `$SVP_AWS_MGMT_ACCOUNT_ID` (khác thì dừng trước apply); `Apply complete!`, số `added` bằng `to add`
+  của plan; plan cuối `No changes.`
+- **Việc tay:** ghi mốc giờ (UTC) cho bước 12.
 
 **8. Tunnel UP** (vài phút sau apply, router cần cài gói và dựng tunnel):
 
@@ -694,8 +735,24 @@ ip route show 10.64.0.0/16
 ```
 
 Dòng `no key for tunnel …` nghĩa là secret có cấu trúc khác cái script nhận: dòng đó chỉ in tên khoá JSON, không in giá
-trị. Sửa hàm `key_for` của script khởi động rồi thay router bằng `terraform apply` của `hybrid` với
-`-replace=module.site.aws_instance.router`.
+trị. Sửa hàm `key_for` của script khởi động
+([`router.sh.tftpl`](modules/onprem-site/templates/router.sh.tftpl)), rồi chạy lại plan, `show`, apply của bước 7: user data
+đổi nên plan thay router (`module.site.aws_instance.router must be replaced`, `user_data_replace_on_change`), chỗ thay này là
+mong đợi.
+
+Thay router mà không đổi code (router đã khởi động lại, mất VTI và route): plan của bước 7 thêm `-replace`, rồi `show`, đọc, apply
+như bước 7:
+
+```sh
+AWS_PROFILE=anhnv-sso \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/hybrid plan -input=false -replace=module.site.aws_instance.router \
+  -out=multi-account-networking-hybrid.tfplan
+```
+
+Mong đợi: chỉ `module.site.aws_instance.router` `must be replaced`.
 
 **9. Gói tin và DNS hai chiều.** Mở phiên tới host:
 
@@ -780,34 +837,66 @@ AWS_PROFILE=anhnv-sso aws ce get-cost-and-usage --time-period Start=<ngày>,End=
 Dán lại bảng; cộng với dòng `APS1-TransitGateway-Hours` của bước 6 (attachment VPN thêm một attachment-giờ mỗi giờ) rồi
 so với bảng hybrid của mục Chi phí.
 
-Kết thúc buổi bằng mục [Dọn dẹp](#dọn-dẹp), cả destroy lẫn quét sót.
+Kết thúc buổi bằng mục [Dọn dẹp](#dọn-dẹp), cả plan `-destroy` lẫn quét sót.
 
 ## Dọn dẹp
 
-Theo thứ tự ngược lúc dựng, cùng các biến terminal của buổi.
+Theo thứ tự ngược lúc dựng, cùng các biến terminal và thư mục buổi. Gỡ theo khuôn của
+[`docs/terraform-commands.md`](../docs/terraform-commands.md#gỡ): plan `-destroy` ra file, đọc, rồi apply đúng file đó.
 
-**0. Destroy `hybrid`** (khi buổi có phần hybrid; trước `core`, vì `hybrid` gắn rule vào Profile và luật vào security
+**0. Gỡ `hybrid`** (khi buổi có phần hybrid; trước `core`, vì `hybrid` gắn rule vào Profile và luật vào security
 group của `core`):
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID \
-  TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID terraform -chdir=multi-account-networking/hybrid destroy
+AWS_PROFILE=anhnv-sso \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/hybrid plan -destroy -input=false -out=multi-account-networking-hybrid-destroy.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/hybrid show -no-color multi-account-networking-hybrid-destroy.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-hybrid-destroy-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-hybrid-destroy-plan.txt"
 ```
 
-Mong đợi `Destroy complete! Resources: 76 destroyed.` Service-linked role `AWSServiceRoleForVPCS2SVPN` (VPN tạo khi
-dùng Secrets Manager [N29]) ở lại `svp-network`, không tính phí. Rồi xoá `hybrid/terraform.tfstate.backup` và
-`hybrid/hybrid.tfplan`: chúng giữ state trước destroy, mọi thuộc tính dạng rõ (cấu hình customer gateway, ARN secret,
-địa chỉ).
-
-**1. Destroy `core`** (gỡ mọi share RAM, rồi tắt chia sẻ RAM trong org):
+- **Mong đợi:** `Plan: 0 to add, 0 to change, N to destroy.`, N bằng số `to add` ở mục
+  [`hybrid`](docs/inventory.md#multi-account-networkinghybrid) của trang inventory.
+- **Bẫy:** plan còn `will be created` hay N khác thì dừng, dán các dòng `grep` in ra.
 
 ```sh
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID TF_VAR_network_account_id=$SVP_AWS_NETWORK_ACCOUNT_ID \
-  TF_VAR_stg_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_prd_account_id=$SVP_AWS_PRD_ACCOUNT_ID \
-  terraform -chdir=multi-account-networking/core destroy
+AWS_PROFILE=anhnv-sso \
+  terraform -chdir=multi-account-networking/hybrid apply -input=false multi-account-networking-hybrid-destroy.tfplan \
+  && rm multi-account-networking/hybrid/multi-account-networking-hybrid-destroy.tfplan
 ```
 
-Mong đợi `Destroy complete! Resources: 128 destroyed.` Service-linked role `AWSServiceRoleForResourceAccessManager` ở
+Mong đợi `Destroy complete!` với N tài nguyên. Service-linked role `AWSServiceRoleForVPCS2SVPN` (VPN tạo khi dùng Secrets Manager
+[N29]) ở lại `svp-network`, không tính phí. `hybrid/terraform.tfstate.backup` giữ state trước khi gỡ, mọi thuộc tính dạng rõ (cấu
+hình customer gateway, ARN secret, địa chỉ): bước 4 xoá nó.
+
+**1. Gỡ `core`** (gỡ mọi share RAM, rồi tắt chia sẻ RAM trong org):
+
+```sh
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+TF_VAR_network_account_id="$SVP_AWS_NETWORK_ACCOUNT_ID" \
+TF_VAR_stg_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+TF_VAR_prd_account_id="$SVP_AWS_PRD_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/core plan -destroy -input=false -out=multi-account-networking-core-destroy.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/core show -no-color multi-account-networking-core-destroy.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-core-destroy-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-core-destroy-plan.txt"
+```
+
+- **Mong đợi:** `Plan: 0 to add, 0 to change, N to destroy.`, N bằng số `to add` ở mục
+  [`core`](docs/inventory.md#multi-account-networkingcore) của trang inventory.
+- **Bẫy:** N khác thì dừng, dán các dòng `grep` in ra.
+
+```sh
+AWS_PROFILE=anhnv-sso \
+  terraform -chdir=multi-account-networking/core apply -input=false multi-account-networking-core-destroy.tfplan \
+  && rm multi-account-networking/core/multi-account-networking-core-destroy.tfplan
+```
+
+Mong đợi `Destroy complete!` với N tài nguyên. Service-linked role `AWSServiceRoleForResourceAccessManager` ở
 lại management; tài liệu RAM tả cách xoá nó khi muốn gỡ hẳn [N2].
 
 **2. Tắt trusted access của Reachability Analyzer** [N5], rồi kiểm cả hai công tắc đã tắt:
@@ -880,50 +969,218 @@ AWS_PROFILE=anhnv-stg aws ec2 describe-vpc-endpoints --filters Name=tag:Name,Val
   --region ap-southeast-1 --query 'VpcEndpoints[].VpcEndpointId' --output text
 ```
 
-Mong đợi mọi lệnh in rỗng (chỉ các dòng `==`). Còn gì thì dán lại; xoá bằng Terraform (chạy lại destroy) trước, tay sau.
+Mong đợi mọi lệnh in rỗng (chỉ các dòng `==`). Còn gì thì dán lại; xoá bằng Terraform (chạy lại plan `-destroy` của root đó) trước, tay sau.
+
+**4. Xoá state local và file của buổi.** State của `core`, `hybrid` chỉ xoá khi nó rỗng: mất state mà tài nguyên còn thì
+Terraform không còn biết nó, chỉ còn cách xoá tay ([lý do](../docs/terraform-commands.md#khi-apply-lỗi-giữa-chừng)).
+
+```sh
+terraform -chdir=multi-account-networking/hybrid state list
+terraform -chdir=multi-account-networking/core state list
+```
+
+- **Mong đợi:** hai lệnh không in gì. Còn dòng nào thì đừng xoá: chạy lại bước 0 hay 1 của root đó.
+
+```sh
+rm -f multi-account-networking/hybrid/terraform.tfstate* multi-account-networking/core/terraform.tfstate*
+```
+
+State của `account` giữ tới khi đóng account (mục dưới). Thư mục buổi giữ bản văn bản của plan, có account ID và id tài nguyên:
+xoá bằng `rm -rf "$SVP_LAB_SESSION_DIR"` sau khi đã chép số đo theo mục [Sau buổi](#sau-buổi).
 
 ### Đóng account `svp-network`
 
-Chỉ khi bài không còn buổi nào, sau Dọn dẹp ở trên. Đóng account không đảo ngược: account đóng hiện `CLOSED` trong org
-tới 90 ngày, vẫn tính vào quota số account; trong 30 ngày liên tiếp chỉ đóng được 20% hay 250 account thành viên, tối đa
-1 000 [N23].
+Chỉ khi bài không còn buổi nào, sau Dọn dẹp ở trên, ở terminal có thư mục buổi. Đóng account không đảo ngược: account
+đóng hiện `CLOSED` trong org tới 90 ngày, vẫn tính vào quota số account; trong 30 ngày liên tiếp chỉ đóng được 20% hay 250
+account thành viên, tối đa 1 000 [N23]. Kiểm account ngay trước lệnh ghi:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws sts get-caller-identity --query Account --output text --region ap-southeast-1
-AWS_PROFILE=anhnv-sso aws organizations close-account --account-id "$SVP_AWS_NETWORK_ACCOUNT_ID" --region us-east-1
-AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account state rm aws_organizations_account.network
 ```
 
-Dòng đầu bằng `$SVP_AWS_MGMT_ACCOUNT_ID`. Sau khi AWS gỡ hẳn account khỏi org (lệnh dưới không in id nào), xoá OU:
+Số in ra phải bằng `$SVP_AWS_MGMT_ACCOUNT_ID`; khác thì dừng. Rồi đóng account và, chỉ khi lệnh đóng thành công, bỏ nó khỏi state
+(`prevent_destroy` chặn mọi plan gỡ nó):
+
+```sh
+AWS_PROFILE=anhnv-sso aws organizations close-account --account-id "$SVP_AWS_NETWORK_ACCOUNT_ID" --region us-east-1 \
+  && AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account state rm aws_organizations_account.network
+```
+
+Sau khi AWS gỡ hẳn account khỏi OU (lệnh dưới không in id nào), gỡ OU theo cùng khuôn:
 
 ```sh
 AWS_PROFILE=anhnv-sso aws organizations list-accounts-for-parent --region us-east-1 --query 'Accounts[].Id' --output text \
   --parent-id "$(AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account output -raw infrastructure_ou_id)"
-AWS_PROFILE=anhnv-sso TF_VAR_management_account_id=$SVP_AWS_MGMT_ACCOUNT_ID terraform -chdir=multi-account-networking/account destroy
+AWS_PROFILE=anhnv-sso \
+TF_VAR_management_account_id="$SVP_AWS_MGMT_ACCOUNT_ID" \
+  terraform -chdir=multi-account-networking/account plan -destroy -input=false -out=multi-account-networking-account-destroy.tfplan
+AWS_PROFILE=anhnv-sso terraform -chdir=multi-account-networking/account show -no-color multi-account-networking-account-destroy.tfplan \
+  > "$SVP_LAB_SESSION_DIR/multi-account-networking-account-destroy-plan.txt"
+grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/multi-account-networking-account-destroy-plan.txt"
 ```
 
-Mong đợi `Destroy complete! Resources: 1 destroyed.` Rồi xoá khối `[profile anhnv-network]` khỏi `~/.aws/config`, file
-`account.auto.tfvars`, state local của ba root (`terraform.tfstate*`) và plan đã lưu (`account.tfplan`, `core.tfplan`,
-`hybrid.tfplan`):
-state và plan giữ email root và mọi thuộc tính dạng rõ.
+- **Mong đợi:** chỉ OU `Infrastructure` `will be destroyed`: `Plan: 0 to add, 0 to change, 1 to destroy.` (account đã ra khỏi state).
 
-## Đề SAP
+```sh
+AWS_PROFILE=anhnv-sso \
+  terraform -chdir=multi-account-networking/account apply -input=false multi-account-networking-account-destroy.tfplan \
+  && rm multi-account-networking/account/multi-account-networking-account-destroy.tfplan
+terraform -chdir=multi-account-networking/account state list
+```
 
-Theo exam guide SAP-C02 [N24]:
+- **Mong đợi:** `Destroy complete! Resources: 1 destroyed.`, rồi `state list` không in gì; còn dòng nào thì đừng xoá state, chạy lại
+  plan `-destroy`.
 
-- **1.1** Architect network connectivity strategies: Transit Gateway, route table tách env, blackhole, egress tập trung,
-  VPC sharing, DNS riêng chéo account; Direct Connect, Cloud WAN trên giấy. Hybrid: Site-to-Site VPN trên Transit
-  Gateway, định tuyến tĩnh so với BGP, Resolver inbound và outbound với on-prem, PrivateLink giữa account.
-- **1.2** Prescribe security controls: cách ly prd và non-prd ở tầng định tuyến, chia sẻ RAM chỉ trong org, SCP và RCP
-  áp lên account mới. Hybrid: PSK trong Secrets Manager, thuật toán tunnel ghim, endpoint service một principal và chấp
-  nhận từng endpoint, on-prem không tới prd.
-- **1.3** Design reliable and resilient architectures: cái giá của một NAT Gateway, một AZ; SSM phụ thuộc lối ra chung.
-  Hybrid: hai tunnel, chuyển tunnel không BGP, router một điểm hỏng.
-- **1.4** Design a multi-account AWS environment: account mạng ở OU Infrastructure, trusted access, delegated service,
-  hệ quả lên dịch vụ tự bật theo org.
-- **1.5** Determine cost optimization and visibility strategies: phí attachment, NAT dùng chung so với NAT mỗi VPC,
-  Route 53 Profiles so với association trực tiếp, phí của account để không. Hybrid: phí ENI của Resolver, VPN và
-  attachment VPN, PrivateLink so với route qua Transit Gateway.
+State và `account.auto.tfvars` giữ email root và mọi thuộc tính dạng rõ: xoá chúng, rồi xoá khối `[profile anhnv-network]` khỏi
+`~/.aws/config`.
+
+```sh
+rm -f multi-account-networking/account/terraform.tfstate* multi-account-networking/account/account.auto.tfvars
+```
+
+## Sau buổi
+
+Kết luận của bài chỉ viết sau buổi, bằng số đo thật; không viết trước. Sau buổi:
+
+1. **Ghi số đo** từ thư mục buổi và các output đã dán:
+   - sáu dòng `reachability.sh` của bước 4 và hai dòng của bước 10: kết quả, `verdict`, số giây, mã giải thích;
+   - ping, `curl`, `getent`, `dig` của bước 5 và 9, so với mong đợi ở mục [Đo gì](#đo-gì);
+   - trạng thái hai tunnel (bước 8) và số giây ping mất khi chuyển tunnel (bước 11, nếu chạy);
+   - bảng Cost Explorer của bước 6 và 12, so với mục [Chi phí](#chi-phí);
+   - thời gian thật của dựng, đo, gỡ, để thay số ước tính ở bảng đầu trang.
+2. **Viết ADR mới** ở `svp-backend` (`docs/adr/`), nơi kết luận của bài nằm: mô hình hub so với mỗi env một VPC độc lập của
+   [ADR-0059](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0059-org-structure-guardrails.md) và
+   [ADR-0064](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0064-interface-endpoints.md), với số của buổi. README
+   này thêm mục kết luận trỏ ADR đó, cùng lúc.
+3. **Giữ repo sạch:** số đo vào ADR không mang account ID, IP công khai (EIP của NAT, của router) hay id tài nguyên; thay bằng
+   `000000000000`, `<ip>`. Rồi xoá thư mục buổi (bước 4 của Dọn dẹp).
+4. **Quyết account:** giữ `svp-network` cho buổi sau hay đóng nó, theo mục
+   [Account `svp-network` và đường chính](#account-svp-network-và-đường-chính).
+
+## Ôn SAP-C03
+
+Theo exam guide SAP-C03 [N24], bài phục vụ các task:
+
+- **1.3** Hybrid: Site-to-Site VPN trên Transit Gateway, tĩnh so với BGP, Resolver inbound, outbound; Direct Connect trên giấy.
+- **1.4** Mạng: hub Transit Gateway nhiều account, route table và blackhole tách env, VPC sharing, PrivateLink, subnet `/28`.
+- **2.3** Quản trị nhiều account: account mạng ở OU Infrastructure, chia sẻ RAM trong org, SCP, RCP, dịch vụ tự bật theo org.
+- **3.2** Phí mạng: NAT dùng chung so với NAT mỗi VPC, phí xử lý của Transit Gateway, PrivateLink, ENI của Resolver.
+- **3.3** Thấy phí: Cost Explorer theo account và usage type, tag `Lab` trên mọi tài nguyên.
+- **4.3** Độ bền: một NAT trong một AZ, hai tunnel, chuyển tunnel không BGP, router là một điểm hỏng.
+
+### 1. Tách prd khỏi non-prd khi dùng chung lối ra (task 1.4)
+
+Một công ty nối VPC prd và VPC non-prd của nhiều account vào một Transit Gateway. Bảng route của prd và của non-prd mỗi bảng có
+`0.0.0.0/0` tới attachment của VPC egress chung có NAT Gateway. Kiểm thử cho thấy instance prd vẫn mở được kết nối tới instance
+non-prd. Yêu cầu: không gói nào đi giữa hai env, giữ lối ra chung, ít việc vận hành nhất.
+
+- A. Thêm route blackhole CIDR của env kia vào bảng route của mỗi env.
+- B. Tắt association và propagation vào bảng route mặc định của Transit Gateway.
+- C. Thêm NACL ở các subnet của VPC egress, chặn dải của env kia theo cả hai chiều.
+- D. Thay Transit Gateway bằng VPC peering giữa VPC egress và từng VPC env.
+
+**Đáp án:** A. Route blackhole cụ thể hơn `0.0.0.0/0`, nên Transit Gateway bỏ gói ngay ở bảng của env gửi; whitepaper multi-VPC
+dùng đúng cách này cho egress tập trung [N7].
+
+**Vì sao không phải:**
+
+- B: mỗi env đã có bảng riêng; gói vẫn theo `0.0.0.0/0` vào VPC egress, NAT Gateway đưa nó về Transit Gateway tới env kia.
+- C: chặn được, nhưng NACL không giữ trạng thái: mỗi env mới thêm luật hai chiều ở VPC egress, xa chỗ định tuyến.
+- D: peering không bắc cầu và không cho đi qua NAT Gateway của VPC bên kia [N10]: env mất lối ra chung.
+
+**Trong lab:** bước 4, `stg-to-prd`, `prd-to-stg` ra `found=unreachable` với mã giải thích; bảng route ở mục
+[Transit Gateway và route table](#transit-gateway-và-route-table).
+
+### 2. Lối ra Internet chung có rẻ hơn không (task 3.2)
+
+Mười VPC dev ở `ap-southeast-1` đã gắn Transit Gateway để nói chuyện với nhau, mỗi VPC một NAT Gateway, lưu lượng ra Internet
+nhỏ. Bộ phận tài chính muốn giảm phí cố định mỗi giờ; team dev chấp nhận mất Internet khi một AZ hỏng.
+
+- A. Giữ NAT Gateway ở mỗi VPC, thêm gateway endpoint cho S3.
+- B. Một VPC egress có một NAT Gateway; route `0.0.0.0/0` của các VPC và của bảng route Transit Gateway trỏ về đó.
+- C. Thay NAT Gateway bằng egress-only internet gateway ở mỗi VPC.
+- D. Gắn Internet gateway và IP công khai cho mọi instance, bỏ NAT Gateway.
+
+**Đáp án:** B. Mười VPC đã có attachment, nên phí giờ còn một NAT Gateway ($0,059) và attachment của VPC egress ($0,07) thay cho
+mười NAT Gateway (10 × $0,059): bớt ~$0,46 mỗi giờ [P1], [P2]. Cái giá: mỗi GB ra Internet trả thêm phí xử lý của Transit Gateway
+$0,02 [P1], và một AZ hỏng thì mọi VPC mất Internet; whitepaper khuyên mỗi AZ một NAT khi cần sẵn sàng cao [N7].
+
+**Vì sao không phải:**
+
+- A: endpoint chỉ bớt phí dữ liệu tới S3, không bớt phí giờ của NAT Gateway.
+- C: egress-only internet gateway chỉ cho IPv6 đi ra; VPC chỉ có IPv4 không dùng được.
+- D: mỗi IPv4 công khai $0,005 mỗi giờ [P1], và mọi instance lộ ra Internet.
+
+**Trong lab:** bước 5, `curl checkip` ở probe-stg, probe-shared, probe-prd in cùng `nat_public_ip`; phí ở mục
+[Chi phí](#chi-phí).
+
+### 3. DNS hai chiều với on-prem cho nhiều account (task 1.3)
+
+Data center của một công ty nối AWS qua Site-to-Site VPN gắn Transit Gateway ở account mạng. Server on-prem cần phân giải private
+hosted zone của AWS; workload ở mọi account cần phân giải zone on-prem `corp.example`. Yêu cầu: quản ở một chỗ, ít ENI nhất.
+
+- A. DNS on-prem forward thẳng tới địa chỉ `.2` của VPC (Resolver của VPC) qua VPN.
+- B. Resolver inbound và outbound endpoint ở mỗi VPC của mỗi account.
+- C. Resolver inbound và outbound endpoint ở một VPC trung tâm của account mạng; DNS on-prem forward có điều kiện tới địa chỉ
+  inbound; rule FORWARD cho `corp.example` chia sẻ tới VPC của các account.
+- D. Đổi các private hosted zone thành public hosted zone.
+
+**Đáp án:** C. Whitepaper multi-VPC khuyên gom endpoint vào một VPC trung tâm, gắn mọi private hosted zone vào VPC đó và chia sẻ rule
+qua RAM [N39]; Route 53 Profile cũng mang rule tới các VPC [N11].
+
+**Vì sao không phải:**
+
+- A: Resolver `.2` không tới được từ on-prem [N39].
+- B: mỗi endpoint tối thiểu hai địa chỉ [N31], mỗi ENI $0,125 mỗi giờ [P3]: phí nhân theo số VPC, rule rải khắp nơi.
+- D: lộ tên nội bộ ra DNS công khai, và AWS vẫn không phân giải được zone on-prem.
+
+**Trong lab:** bước 9, `dig` từ host in địa chỉ của probe-shared; `getent hosts router.onprem.svp.example` ở probe-stg, probe-prd
+in `192.168.0.10`.
+
+### 4. Gọi một dịch vụ giữa hai env đã tách (task 1.4)
+
+Một ứng dụng ở account stg cần gọi một API HTTP chạy sau NLB ở account prd. Bảo mật cấm mọi route IP giữa VPC prd và VPC stg, và
+hai VPC có thể trùng dải địa chỉ sau này. Chỉ đúng endpoint mà stg tạo được nối.
+
+- A. Route tĩnh giữa hai subnet qua Transit Gateway, security group chỉ mở cổng của API.
+- B. VPC peering giữa hai VPC, route chỉ tới subnet của NLB.
+- C. Đổi NLB thành internet-facing, security group chỉ nhận EIP của NAT Gateway của stg.
+- D. Endpoint service trên NLB của prd, cho phép principal là account stg, chấp nhận kết nối bằng tay; interface endpoint ở VPC
+  stg.
+
+**Đáp án:** D. PrivateLink cho truy cập một chiều từ consumer tới một dịch vụ, kể cả khi hai VPC trùng dải [N40]; danh sách principal
+được phép và bước chấp nhận ghim đúng endpoint [N33].
+
+**Vì sao không phải:**
+
+- A: tạo route IP giữa hai env, trái yêu cầu, và không chạy khi hai dải trùng.
+- B: peering cũng là route IP và không nhận hai VPC trùng dải [N10].
+- C: gói đi qua Internet, dịch vụ lộ ra ngoài.
+
+**Trong lab:** bước 10, `curl` tới `service_dns_name` in `svp-lab-net-svc` trong khi `prd-to-stg` vẫn `found=unreachable`.
+
+### 5. Chia sẻ hub mạng cho các account của tổ chức (task 2.3)
+
+Account mạng mới ở OU Infrastructure giữ Transit Gateway và một subnet dùng chung. Mọi account workload của tổ chức phải dùng được
+chúng mà không ai phải chấp nhận lời mời; tài nguyên không được chia sẻ ra ngoài tổ chức.
+
+- A. Share RAM tới từng account ID; quản trị viên mỗi account chấp nhận lời mời.
+- B. Bật chia sẻ RAM với Organizations ở account management; share RAM của account mạng không cho principal ngoài tổ chức.
+- C. Mỗi account workload một Transit Gateway, peering với Transit Gateway của account mạng.
+- D. Dựng VPC của mọi workload ngay trong account mạng.
+
+**Đáp án:** B. Bật chia sẻ trong tổ chức thì principal cùng tổ chức dùng được tài nguyên chia sẻ mà không qua lời mời [N2]; share
+không cho principal ngoài tổ chức (`allow_external_principals = false` ở module `ram-share`), và subnet vốn chỉ chia sẻ được trong
+tổ chức [N4].
+
+**Vì sao không phải:**
+
+- A: không bật chia sẻ trong tổ chức thì mỗi account nhận lời mời và phải chấp nhận [N2]: mỗi account mới thêm một việc tay.
+- C: mỗi account thêm một Transit Gateway, một peering và route ở hai đầu: thêm phí giờ, trái mô hình hub.
+- D: bỏ ranh giới account giữa các env, trái mô hình mỗi env một account.
+
+**Trong lab:** bước 3 tạo share `svp-lab-net-tgw`, `svp-lab-net-subnet`, `svp-lab-net-dns`; bước 5, `describe-subnets` từ stg
+in `OwnerId` là id của `svp-network`.
 
 ## Kiểm offline
 
@@ -934,6 +1191,7 @@ make tf-check DIRS=multi-account-networking
 make shellcheck DIRS=multi-account-networking
 bash multi-account-networking/scripts/reachability-test.sh
 make docs-check DOCS='multi-account-networking/**/*.md'
+make diagrams-check NAMES=multi-account-networking
 ```
 
 `make tf-check` gồm cả root `hybrid/` và module của nó; script khởi động của router là template
@@ -952,6 +1210,9 @@ dòng chính của bản render.
 - [`modules/dns-hub/`](modules/dns-hub/): hai private hosted zone, bản ghi, authorization, Route 53 Profile.
 - [`modules/dns-spoke/`](modules/dns-spoke/): association của Profile và zone ở account spoke.
 - [`scripts/reachability.sh`](scripts/reachability.sh): một đường Reachability Analyzer, kèm `reachability-test.sh`.
+- [`docs/inventory.md`](docs/inventory.md): số tài nguyên mỗi root tạo trên account trống, sinh bằng `make inventory`.
+- [`../docs/diagrams/multi-account-networking/`](../docs/diagrams/multi-account-networking/): nguồn D2 của ba sơ đồ ở mục
+  Thiết kế, sinh SVG bằng `make diagrams`.
 - [`hybrid/`](hybrid/): root, on-prem mô phỏng, VPN, Resolver endpoint, PrivateLink; tra tài nguyên của `core/` theo tên
   ở dưới.
 - [`modules/site-vpn/`](modules/site-vpn/): EIP và customer gateway, VPN connection, gắn attachment VPN, route tới
@@ -989,12 +1250,13 @@ Tên và tag cho root khác tra cứu bằng data source (region `ap-southeast-1
 
 ## Nguồn
 
-Đọc 2026-11-17.
+Đọc 2026-11-17; [N24], [N10] và trang thuật ngữ của [N2] đọc 2026-11-22.
 
 - [N1] AWS SRA, Infrastructure OU – Network account:
   <https://docs.aws.amazon.com/prescriptive-guidance/latest/security-reference-architecture/network.html>
 - [N2] AWS RAM, chia sẻ trong AWS Organizations:
   <https://docs.aws.amazon.com/ram/latest/userguide/getting-started-sharing.html>,
+  <https://docs.aws.amazon.com/ram/latest/userguide/getting-started-terms-and-concepts.html>,
   <https://docs.aws.amazon.com/ram/latest/userguide/security-disable-sharing-with-orgs.html>
 - [N3] Mã nguồn provider `hashicorp/aws`, xoá `aws_ram_sharing_with_organization` tắt service principal
   `ram.amazonaws.com`:
@@ -1013,7 +1275,8 @@ Tên và tag cho root khác tra cứu bằng data source (region `ap-southeast-1
   <https://docs.aws.amazon.com/whitepapers/latest/building-scalable-secure-multi-vpc-network-infrastructure/welcome.html>
 - [N8] Transit Gateway VPC attachment: <https://docs.aws.amazon.com/vpc/latest/tgw/tgw-vpc-attachments.html>
 - [N9] Thiết kế Transit Gateway: <https://docs.aws.amazon.com/vpc/latest/tgw/tgw-best-design-practices.html>
-- [N10] VPC peering: <https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html>
+- [N10] VPC peering, giới hạn (không bắc cầu, không đi qua gateway của VPC bên kia, không trùng dải):
+  <https://docs.aws.amazon.com/vpc/latest/peering/vpc-peering-basics.html>
 - [N11] Route 53 Profiles: <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/profiles.html>
 - [N12] Gắn private hosted zone với VPC của account khác:
   <https://docs.aws.amazon.com/Route53/latest/DeveloperGuide/hosted-zone-private-associate-vpcs-different-accounts.html>
@@ -1039,8 +1302,8 @@ Tên và tag cho root khác tra cứu bằng data source (region `ap-southeast-1
 - [N23] Đóng account thành viên:
   <https://docs.aws.amazon.com/organizations/latest/userguide/orgs_manage_accounts_close.html>,
   <https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-closing.html>
-- [N24] Exam guide AWS Certified Solutions Architect – Professional (SAP-C02):
-  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.html>
+- [N24] Exam guide AWS Certified Solutions Architect – Professional (SAP-C03):
+  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-03/solutions-architect-professional-03.html>
 - [N25] AWS Cloud WAN: <https://docs.aws.amazon.com/network-manager/latest/cloudwan/what-is-cloudwan.html>
 - [N26] Định tuyến tĩnh và động của Site-to-Site VPN (khuyên BGP để chuyển tunnel):
   <https://docs.aws.amazon.com/vpn/latest/s2svpn/vpn-static-dynamic.html>

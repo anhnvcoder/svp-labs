@@ -111,6 +111,7 @@ module "dr_db" {
   subnet_ids               = module.dr_network.db_subnet_ids
   client_security_group_id = module.dr_bastion.security_group_id
   replicate_source_db      = module.primary_db.arn
+  replicate_backups        = true
   replicate_backups_from   = module.primary_db.arn
   kms_key_arn              = data.aws_kms_key.dr_rds.arn
 }

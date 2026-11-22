@@ -1,5 +1,11 @@
 # reusable-spike: reusable workflow hay composite action thay cho checkout ghim script của repo khác
 
+Bài hỏi: reusable workflow hay composite action thay được checkout ghim script của repo khác. Kết luận: composite action, vì reusable
+workflow đổi identity ký của mọi nguồn và Kyverno v1.19.1 không tách được repo gọi; reusable workflow (L3) để lại ở
+[ADR-0040][adr-0040]. Spike một lần, không bảo trì tiếp.
+
+[adr-0040]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md
+
 Spike một lần. CI của `svp-frontend` chạy `deploy/ci/*.sh` của `svp-backend` từ một checkout ghim (`.backend/`, commit ở `.backend-commit`). Hai
 cách chuẩn của GitHub để bỏ checkout đó: **reusable workflow** (`on: workflow_call`, gọi bằng `uses: owner/repo/.github/workflows/x.yml@<sha>`)
 và **composite action** (`uses: owner/repo/.github/actions/x@<sha>`). Bài này thử cả hai trong `svp-labs`, gọi bằng đường đầy đủ

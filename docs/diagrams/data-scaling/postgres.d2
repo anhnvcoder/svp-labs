@@ -1,0 +1,241 @@
+# The postgres root of data-scaling: the loader in the public subnet is the only client of Aurora, RDS Proxy, RDS
+# Multi-AZ and its replica in the data subnets; the learner drives it through SSM. The learner sits above the account
+# so the picture stays under 1500 px wide; the loader is centred on the four databases so no arrow crosses a block.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Root postgres: loader đo Aurora, RDS Multi-AZ và RDS Proxy qua những đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 3
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  head: "" {
+    grid-rows: 1
+    grid-columns: 2
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    lsp: "" {width: 40; style: {stroke: transparent; fill: transparent}}
+    learner: "Máy người học" {
+      class: workload
+      height: 110
+      grid-rows: 2
+      grid-gap: 6
+      s: "pg-session.sh: Run Command, failover,\nsự kiện qua API RDS, metric CloudWatch" {class: sub}
+      r: "data-scaling/scripts" {class: root}
+    }
+  }
+  vgap: "" {height: 60; style: {stroke: transparent; fill: transparent}}
+
+  acct: "account svp-stg (profile anhnv-stg)" {
+    class: account
+    label.near: bottom-right
+
+    aps1: "ap-southeast-1" {
+      class: region
+      label.near: top-right
+      grid-rows: 1
+      grid-columns: 3
+      grid-gap: 0
+
+      c1: "" {
+        grid-rows: 4
+        grid-columns: 1
+        grid-gap: 0
+        style: {stroke: transparent; fill: transparent}
+        ssm: "Điều khiển loader" {
+          class: workload
+          height: 130
+          grid-rows: 1
+          grid-columns: 2
+          grid-gap: 16
+          i: "Systems Manager" {
+            shape: image
+            icon: ../icons/systems-manager.svg
+            width: 48
+            height: 48
+            style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+          }
+          t: "" {
+            grid-rows: 2
+            grid-gap: 6
+            style: {stroke: transparent; fill: transparent}
+            s: "Run Command\nAWS-RunShellScript" {class: sub}
+            r: "modules/loader" {class: root}
+          }
+        }
+        sp3: "" {height: 150; style: {stroke: transparent; fill: transparent}}
+        secret: "Mật khẩu master" {
+          class: prevention
+          height: 130
+          grid-rows: 1
+          grid-columns: 2
+          grid-gap: 16
+          i: "Secrets Manager" {
+            shape: image
+            icon: ../icons/secrets-manager.svg
+            width: 48
+            height: 48
+            style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+          }
+          t: "" {
+            grid-rows: 2
+            grid-gap: 6
+            style: {stroke: transparent; fill: transparent}
+            s: "svp-lab-ds-pg-master\nghi write-only" {class: sub}
+            r: "modules/db-secret" {class: root}
+          }
+        }
+        sp4: "" {height: 230; style: {stroke: transparent; fill: transparent}}
+      }
+      g1: "" {width: 90; style: {stroke: transparent; fill: transparent}}
+
+      vpc: "VPC svp-lab-ds-pg 10.67.0.0/20 · subnet data 10.67.1.0/24 (AZ 1),\n10.67.2.0/24 (AZ 2), không route ra Internet" {
+        class: region
+        label.near: bottom-left
+        grid-rows: 1
+        grid-columns: 4
+        grid-gap: 0
+
+        c2: "" {
+          grid-rows: 3
+          grid-columns: 1
+          grid-gap: 0
+          style: {stroke: transparent; fill: transparent}
+          sp1: "" {height: 255; style: {stroke: transparent; fill: transparent}}
+          loader: "Loader" {
+            class: workload
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "EC2" {
+              shape: image
+              icon: ../icons/ec2.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-pg-loader\nt4g.small · pg.sh, pgbench\nsubnet public 10.67.0.0/24" {class: sub}
+              r: "modules/loader" {class: root}
+            }
+          }
+          sp2: "" {height: 255; style: {stroke: transparent; fill: transparent}}
+        }
+        g2: "" {width: 130; style: {stroke: transparent; fill: transparent}}
+
+        c3: "" {
+          grid-rows: 4
+          grid-columns: 1
+          grid-gap: 40
+          style: {stroke: transparent; fill: transparent}
+          proxy: "Proxy kết nối · biến proxy" {
+            class: workload
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "RDS Proxy" {
+              shape: image
+              icon: ../icons/rds.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-proxy · cert ACM\nTLS bắt buộc · đọc secret" {class: sub}
+              r: "modules/rds-proxy" {class: root}
+            }
+          }
+          aurora: "Aurora PostgreSQL 17 · biến aurora" {
+            class: data
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "Aurora · 2" {
+              shape: image
+              icon: ../icons/aurora.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-aurora · db.t4g.medium\nwriter -1 ở AZ 1, reader -2 ở AZ 2" {class: sub}
+              r: "modules/aurora" {class: root}
+            }
+          }
+          rds: "RDS PostgreSQL 17 Multi-AZ · biến rds" {
+            class: data
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "RDS" {
+              shape: image
+              icon: ../icons/rds.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-rds · db.t4g.micro\nmột standby, không đọc được" {class: sub}
+              r: "modules/rds" {class: root}
+            }
+          }
+          replica: "Read replica" {
+            class: data
+            height: 130
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 16
+            i: "RDS" {
+              shape: image
+              icon: ../icons/rds.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-ds-rds-replica\ndb.t4g.micro · Single-AZ" {class: sub}
+              r: "modules/rds" {class: root}
+            }
+          }
+        }
+        g3: "" {width: 20; style: {stroke: transparent; fill: transparent}}
+      }
+    }
+  }
+}
+
+all.head.learner -> all.acct.aps1.c1.ssm: "Run Command" {class: control-flow}
+all.acct.aps1.c1.ssm -> all.acct.aps1.vpc.c2.loader: "chạy pg.sh" {class: control-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.c1.secret: "GetSecretValue" {class: control-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.proxy: "5432 · CA Amazon\nTrust Services" {class: data-flow}
+all.acct.aps1.vpc.c3.proxy -> all.acct.aps1.vpc.c3.aurora: "pool tới writer" {class: data-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.aurora: "5432 · CA RDS" {class: data-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.rds {class: data-flow}
+all.acct.aps1.vpc.c2.loader -> all.acct.aps1.vpc.c3.replica {class: data-flow}
+all.acct.aps1.vpc.c3.rds -> all.acct.aps1.vpc.c3.replica: "sao chép\nbất đồng bộ" {class: data-flow}

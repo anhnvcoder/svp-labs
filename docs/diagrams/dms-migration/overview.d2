@@ -1,0 +1,282 @@
+# Overview of dms-migration/terraform: the on-premises stand-in (PostgreSQL on EC2 in a VPC of its own), the VPC
+# peering that plays the VPN or Direct Connect, the AWS-side VPC where DMS moves the data into RDS, and the regional
+# services outside both VPCs. Spacers keep three rows level across the columns, so every arrow is a straight line.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Dữ liệu của svp_engagement đi từ PostgreSQL on-prem sang RDS qua những gì?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 3
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  head: "" {
+    grid-rows: 1
+    grid-columns: 2
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    lsp: "" {width: 70; style: {stroke: transparent; fill: transparent}}
+    learner: "Máy người học" {
+      class: workload
+      height: 90
+      grid-rows: 1
+      s: "session.sh: Run Command,\nAPI DMS, CloudWatch" {class: sub}
+    }
+  }
+  vgap: "" {height: 50; style: {stroke: transparent; fill: transparent}}
+
+  stg: "Account svp-stg" {
+    class: account
+    label.near: top-left
+
+    aps1: "ap-southeast-1\nmọi instance ở AZ đầu tiên" {
+      class: region
+      label.near: top-center
+      grid-rows: 1
+      grid-columns: 9
+      grid-gap: 0
+
+      rl: "" {width: 12; style: {stroke: transparent; fill: transparent}}
+      c1: "" {
+        grid-rows: 5
+        grid-columns: 1
+        grid-gap: 0
+        style: {stroke: transparent; fill: transparent}
+          t1: "" {height: 30; style: {stroke: transparent; fill: transparent}}
+          ssm: "Lệnh, mật khẩu cho nguồn" {
+            class: prevention
+            height: 120
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 14
+            i: "Systems Manager" {
+              shape: image
+              icon: ../icons/systems-manager.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "Run Command\n/svp-lab-dms/source/\nsvp_dms-password" {class: sub}
+              r: "modules/source-db" {class: root}
+            }
+          }
+          g1: "" {height: 134; style: {stroke: transparent; fill: transparent}}
+          onprem: "On-prem mô phỏng\nVPC svp-lab-dms-onprem\n192.168.16.0/20 · IGW" {
+            class: onprem
+            label.near: bottom-center
+            grid-rows: 1
+            grid-columns: 1
+            grid-gap: 24
+            src: "PostgreSQL nguồn" {
+              class: data
+              height: 120
+              grid-rows: 1
+              grid-columns: 2
+              grid-gap: 14
+              i: "EC2" {
+                shape: image
+                icon: ../icons/ec2.svg
+                width: 48
+                height: 48
+                style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+              }
+              t: "" {
+                grid-rows: 2
+                grid-gap: 6
+                style: {stroke: transparent; fill: transparent}
+                s: "svp-lab-dms-source\nt4g.micro · PG 17\npgload.sh: tải, cutover" {class: sub}
+                r: "modules/source-db" {class: root}
+              }
+            }
+          }
+          f1: "" {height: 240; style: {stroke: transparent; fill: transparent}}
+      }
+      h1: "" {width: 30; style: {stroke: transparent; fill: transparent}}
+      c2: "" {
+        grid-rows: 5
+        grid-columns: 1
+        grid-gap: 0
+        style: {stroke: transparent; fill: transparent}
+          t2: "" {height: 30; style: {stroke: transparent; fill: transparent}}
+          sm: "Credential của endpoint" {
+            class: prevention
+            height: 120
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 14
+            i: "Secrets Manager" {
+              shape: image
+              icon: ../icons/secrets-manager.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-dms-source\nsvp-lab-dms-target" {class: sub}
+              r: "modules/endpoint-secret" {class: root}
+            }
+          }
+          e2: "" {height: 150; style: {stroke: transparent; fill: transparent}}
+          pcx: "Đường nối on-prem" {
+            class: workload
+            height: 120
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 14
+            i: "VPC peering" {
+              shape: image
+              icon: ../icons/vpc.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "svp-lab-dms-peering\nroute dải bên kia" {class: sub}
+              r: "modules/peering" {class: root}
+            }
+          }
+          f2: "" {height: 240; style: {stroke: transparent; fill: transparent}}
+      }
+      h2: "" {width: 140; style: {stroke: transparent; fill: transparent}}
+          aws: "VPC svp-lab-dms-aws\n10.66.0.0/20 · subnet private\nở 2 AZ, không route ra Internet" {
+            class: region
+            label.near: bottom-center
+            grid-rows: 1
+            grid-columns: 3
+            grid-gap: 0
+            pl: "" {width: 24; style: {stroke: transparent; fill: transparent}}
+            in: "" {
+              grid-rows: 7
+              grid-columns: 1
+              grid-gap: 0
+              style: {stroke: transparent; fill: transparent}
+                pt: "" {height: 24; style: {stroke: transparent; fill: transparent}}
+                vpce: "Interface endpoint" {
+                  class: workload
+                  height: 120
+                  grid-rows: 1
+                  grid-columns: 2
+                  grid-gap: 14
+                  i: "PrivateLink" {
+                    shape: image
+                    icon: ../icons/privatelink.svg
+                    width: 48
+                    height: 48
+                    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+                  }
+                  t: "" {
+                    grid-rows: 2
+                    grid-gap: 6
+                    style: {stroke: transparent; fill: transparent}
+                    s: "svp-lab-dms-\nsecretsmanager · 1 AZ" {class: sub}
+                    r: "modules/dms" {class: root}
+                  }
+                }
+                v1: "" {height: 158; style: {stroke: transparent; fill: transparent}}
+                dms: "Replication instance" {
+                  class: workload
+                  height: 120
+                  grid-rows: 1
+                  grid-columns: 2
+                  grid-gap: 14
+                  i: "DMS" {
+                    shape: image
+                    icon: ../icons/dms.svg
+                    width: 48
+                    height: 48
+                    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+                  }
+                  t: "" {
+                    grid-rows: 2
+                    grid-gap: 6
+                    style: {stroke: transparent; fill: transparent}
+                    s: "svp-lab-dms\ndms.t3.micro · 3.6.1\nfull load, CDC,\nvalidation" {class: sub}
+                    r: "modules/dms" {class: root}
+                  }
+                }
+                v2: "" {height: 150; style: {stroke: transparent; fill: transparent}}
+                tgt: "PostgreSQL đích" {
+                  class: data
+                  height: 120
+                  grid-rows: 1
+                  grid-columns: 2
+                  grid-gap: 14
+                  i: "RDS" {
+                    shape: image
+                    icon: ../icons/rds.svg
+                    width: 48
+                    height: 48
+                    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+                  }
+                  t: "" {
+                    grid-rows: 2
+                    grid-gap: 6
+                    style: {stroke: transparent; fill: transparent}
+                    s: "svp-lab-dms-target\ndb.t4g.micro · PG 17\nSingle-AZ, backup tắt" {class: sub}
+                    r: "modules/target-db" {class: root}
+                  }
+                }
+                pb: "" {height: 10; style: {stroke: transparent; fill: transparent}}
+            }
+            pr: "" {width: 24; style: {stroke: transparent; fill: transparent}}
+          }
+      h3: "" {width: 30; style: {stroke: transparent; fill: transparent}}
+      c4: "" {
+        grid-rows: 2
+        grid-columns: 1
+        grid-gap: 0
+        style: {stroke: transparent; fill: transparent}
+          t4: "" {height: 306; style: {stroke: transparent; fill: transparent}}
+          cw: "Log, metric của task" {
+            class: detection
+            height: 120
+            grid-rows: 1
+            grid-columns: 2
+            grid-gap: 14
+            i: "CloudWatch" {
+              shape: image
+              icon: ../icons/cloudwatch.svg
+              width: 48
+              height: 48
+              style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+            }
+            t: "" {
+              grid-rows: 2
+              grid-gap: 6
+              style: {stroke: transparent; fill: transparent}
+              s: "dms-tasks-svp-lab-dms\nmetric AWS/DMS" {class: sub}
+              r: "modules/dms" {class: root}
+            }
+          }
+      }
+      rr: "" {width: 12; style: {stroke: transparent; fill: transparent}}
+    }
+  }
+}
+
+all.head.learner -> all.stg.aps1.c1.ssm: "send-command" {class: control-flow}
+all.stg.aps1.c1.onprem.src -> all.stg.aps1.c1.ssm: "agent SSM: nhận lệnh,\nmật khẩu lúc boot" {class: control-flow}
+all.stg.aps1.c1.onprem.src -> all.stg.aps1.c2.sm: "cutover đọc\nsecret đích" {class: control-flow}
+all.stg.aps1.c1.onprem.src -> all.stg.aps1.c2.pcx {class: data-flow}
+all.stg.aps1.c2.pcx -> all.stg.aps1.aws.in.dms: "5432 · TLS require\nslot test_decoding" {class: data-flow}
+all.stg.aps1.aws.in.dms -> all.stg.aps1.aws.in.vpce: "443" {class: data-flow}
+all.stg.aps1.aws.in.vpce -> all.stg.aps1.c2.sm {class: data-flow}
+all.stg.aps1.aws.in.dms -> all.stg.aps1.aws.in.tgt: "5432 · TLS verify-full" {class: data-flow}
+all.stg.aps1.aws.in.dms -> all.stg.aps1.c4.cw {class: data-flow}
+all.stg.aps1.c2.pcx -> all.stg.aps1.aws.in.tgt: "sau cutover: ứng dụng\nghi đích, verify-full" {class: data-flow}

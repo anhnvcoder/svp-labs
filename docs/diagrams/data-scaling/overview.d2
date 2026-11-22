@@ -1,0 +1,125 @@
+# Overview of data-scaling: three parts that each run alone, two Terraform roots in svp-stg and a local container on
+# the learner's machine, and which question each answers. Detail of each root: postgres.d2, valkey.d2.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Lab data-scaling: ba phần chạy riêng, phần nào trả lời câu nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 5
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  lc: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    sp: "" {height: 120; style: {stroke: transparent; fill: transparent}}
+    local: "Phần local · câu 5" {
+      class: data
+      height: 150
+      grid-rows: 2
+      grid-gap: 6
+      s: "container svp-lab-ds-partition\nPostgreSQL 17 trên Docker\npartition bảng timeline, không AWS" {class: sub}
+      r: "data-scaling/partition" {class: root}
+    }
+  }
+  g0: "" {width: 120; style: {stroke: transparent; fill: transparent}}
+  mc: "" {
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    sp: "" {height: 120; style: {stroke: transparent; fill: transparent}}
+    learner: "Máy người học" {
+      class: workload
+      height: 150
+      grid-rows: 2
+      grid-gap: 6
+      s: "AWS CLI v2 · Terraform · Docker\npg-session.sh · kv-session.sh\npartition.sh · sweep.sh" {class: sub}
+      r: "data-scaling/scripts" {class: root}
+    }
+  }
+  g1: "" {width: 130; style: {stroke: transparent; fill: transparent}}
+
+  acct: "account svp-stg (profile anhnv-stg) · ap-southeast-1" {
+    class: account
+    label.near: top-left
+    grid-rows: 2
+    grid-columns: 1
+    grid-gap: 40
+
+    pg: "Root postgres · câu 1, 2, 4" {
+      class: data
+      height: 150
+      grid-rows: 1
+      grid-columns: 2
+      grid-gap: 24
+      ic: "" {
+        grid-rows: 1
+        grid-columns: 3
+        grid-gap: 24
+        style: {stroke: transparent; fill: transparent}
+        a: "Aurora · 2" {
+          shape: image
+          icon: ../icons/aurora.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        r: "RDS · 2" {
+          shape: image
+          icon: ../icons/rds.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        p: "RDS Proxy · 1" {
+          shape: image
+          icon: ../icons/rds.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+      }
+      t: "" {
+        grid-rows: 2
+        grid-gap: 6
+        style: {stroke: transparent; fill: transparent}
+        s: "VPC svp-lab-ds-pg 10.67.0.0/20\nloader EC2 · mỗi phần một biến:\naurora, rds, proxy" {class: sub}
+        r: "data-scaling/postgres" {class: root}
+      }
+    }
+    kv: "Root valkey · câu 3" {
+      class: data
+      height: 150
+      grid-rows: 1
+      grid-columns: 2
+      grid-gap: 24
+      i: "ElastiCache · 2" {
+        shape: image
+        icon: ../icons/elasticache.svg
+        width: 48
+        height: 48
+        style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+      }
+      t: "" {
+        grid-rows: 2
+        grid-gap: 6
+        style: {stroke: transparent; fill: transparent}
+        s: "VPC svp-lab-ds-kv 10.67.16.0/20\nloader EC2 · replication group\ncluster mode bật và tắt" {class: sub}
+        r: "data-scaling/valkey" {class: root}
+      }
+    }
+  }
+}
+
+all.mc.learner -> all.lc.local: "partition.sh" {class: control-flow}
+all.mc.learner -> all.acct.pg: "Run Command\nqua SSM" {class: control-flow}
+all.mc.learner -> all.acct.kv: "Run Command\nqua SSM" {class: control-flow}

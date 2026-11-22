@@ -1,5 +1,11 @@
 # Lab `drills/`: diễn tập đo một lần và kịch bản runner của `verify.yml`
 
+Các diễn tập k8s, compose và kịch bản runner của `verify.yml` đã đo xong một lần và rời đường chính theo [ADR-0039][adr-0039] (nhóm
+diễn tập compose: [ADR-0050][adr-0050]). Số đo nằm ở ADR của `svp-backend`; thư mục giữ bản chép đóng băng, không bảo trì tiếp.
+
+[adr-0039]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md
+[adr-0050]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0050-bash-to-standard-tools.md
+
 Bản **đóng băng** của các diễn tập k8s, kịch bản runner và manifest cluster cloud đã rời đường chính theo ADR-0039 của `svp-backend`. Mọi file
 chép nguyên văn (không sửa), giữ cây thư mục gốc:
 
