@@ -1,0 +1,300 @@
+# Overview of multi-region-dr/terraform: the data tier of svp in ap-southeast-1, its standby in us-east-1 (read
+# replica, replicated backups, secret replica, replicated bucket) and the private name db that a CloudWatch alarm
+# switches between the Regions. Spacers line up the rows of both Regions so each replication arrow stays level.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Mất ap-southeast-1, tầng dữ liệu nào chờ sẵn ở us-east-1 và tên db chuyển sang nó bằng gì?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  acct: "account svp-stg (profile anhnv-stg)" {
+    class: account
+    label.near: top-left
+    grid-rows: 1
+    grid-columns: 5
+    grid-gap: 24
+
+    aps1: "ap-southeast-1 · VPC svp-lab-dr-primary 10.65.0.0/20" {
+      class: region
+      label.near: top-left
+      grid-rows: 6
+      grid-columns: 1
+      grid-gap: 40
+
+      sp0: "" {height: 130; style: {stroke: transparent; fill: transparent}}
+      bastion: "Bastion chính" {
+        class: workload
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "EC2" {
+          shape: image
+          icon: ../icons/ec2.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-bastion-primary\nt4g.micro · SSM · heartbeat\nsubnet public 10.65.0.0/24" {class: sub}
+          r: "modules/bastion" {class: root}
+        }
+      }
+      db: "PostgreSQL chính" {
+        class: data
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "RDS" {
+          shape: image
+          icon: ../icons/rds.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-primary\nPostgreSQL 17 · db.t4g.micro\nsubnet 10.65.1.0/24, .2.0/24" {class: sub}
+          r: "modules/postgres" {class: root}
+        }
+      }
+      sp3: "" {height: 130; style: {stroke: transparent; fill: transparent}}
+      secret: "Mật khẩu master" {
+        class: prevention
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "Secrets Manager" {
+          shape: image
+          icon: ../icons/secrets-manager.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-db-master\nghi write-only" {class: sub}
+          r: "modules/db-secret" {class: root}
+        }
+      }
+      media: "Media" {
+        class: data
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "S3" {
+          shape: image
+          icon: ../icons/s3.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-media-<account>-\nap-southeast-1 · versioning" {class: sub}
+          r: "modules/bucket" {class: root}
+        }
+      }
+    }
+
+    g1: "" {width: 90; style: {stroke: transparent; fill: transparent}}
+    mid: "" {
+      style: {stroke: transparent; fill: transparent}
+      grid-rows: 6
+      grid-columns: 1
+      grid-gap: 40
+
+      m0: "" {width: 10; height: 130; style: {stroke: transparent; fill: transparent}}
+      dns: "Tên db, toàn cầu" {
+        class: recovery
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "Route 53" {
+          shape: image
+          icon: ../icons/route53.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "zone private svp-lab-dr.internal\ndb: cặp CNAME failover, TTL 10 s\nhealth check theo alarm" {class: sub}
+          r: "modules/dns-failover" {class: root}
+        }
+      }
+    }
+
+    g2: "" {width: 90; style: {stroke: transparent; fill: transparent}}
+    use1: "us-east-1 · VPC svp-lab-dr-dr 10.65.16.0/20" {
+      class: region
+      label.near: top-left
+      grid-rows: 6
+      grid-columns: 1
+      grid-gap: 40
+
+      alarm: "Công tắc failover" {
+        class: alerting
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "CloudWatch" {
+          shape: image
+          icon: ../icons/cloudwatch.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "alarm svp-lab-dr-failover\ndrill.sh ghi metric\nFailoverRequested = 1" {class: sub}
+          r: "modules/dns-failover" {class: root}
+        }
+      }
+      bastion: "Bastion DR" {
+        class: workload
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "EC2" {
+          shape: image
+          icon: ../icons/ec2.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-bastion-dr\nt4g.micro · SSM · heartbeat\nsubnet public 10.65.16.0/24" {class: sub}
+          r: "modules/bastion" {class: root}
+        }
+      }
+      replica: "Đường (a): pilot light" {
+        class: data
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "RDS" {
+          shape: image
+          icon: ../icons/rds.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "read replica svp-lab-dr-replica\ndrill promote thành chính\nsubnet 10.65.17.0/24, .18.0/24" {class: sub}
+          r: "modules/postgres" {class: root}
+        }
+      }
+      backup: "Đường (b): backup và restore" {
+        class: data
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "RDS" {
+          shape: image
+          icon: ../icons/rds.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "automated backup đã sao, 1 ngày\ndrill restore PITR ra\nsvp-lab-dr-pitr" {class: sub}
+          r: "modules/postgres" {class: root}
+        }
+      }
+      secret: "Replica của secret" {
+        class: prevention
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "Secrets Manager" {
+          shape: image
+          icon: ../icons/secrets-manager.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-db-master\ncùng tên ở us-east-1" {class: sub}
+          r: "modules/db-secret" {class: root}
+        }
+      }
+      media: "Bản sao media" {
+        class: data
+        height: 130
+        grid-rows: 1
+        grid-columns: 2
+        grid-gap: 16
+        i: "S3" {
+          shape: image
+          icon: ../icons/s3.svg
+          width: 48
+          height: 48
+          style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+        }
+        t: "" {
+          grid-rows: 2
+          grid-gap: 6
+          style: {stroke: transparent; fill: transparent}
+          s: "svp-lab-dr-media-<account>-\nus-east-1 · versioning" {class: sub}
+          r: "modules/bucket · crr" {class: root}
+        }
+      }
+    }
+  }
+}
+
+all.acct.aps1.db -> all.acct.use1.replica: "sao chép bất đồng bộ" {class: data-flow}
+all.acct.aps1.db -> all.acct.use1.backup: "sao automated backup" {class: data-flow}
+all.acct.aps1.secret -> all.acct.use1.secret: "sao chép secret" {class: data-flow}
+all.acct.aps1.media -> all.acct.use1.media: "CRR, role\nsvp-lab-dr-media-replication" {class: data-flow}
+all.acct.aps1.bastion -> all.acct.aps1.db: "5432 · TLS verify-full" {class: data-flow}
+all.acct.use1.bastion -> all.acct.use1.replica: "5432 · TLS verify-full" {class: data-flow}
+all.acct.aps1.bastion -> all.acct.mid.dns: "phân giải db" {class: control-flow}
+all.acct.use1.bastion -> all.acct.mid.dns: "phân giải db" {class: control-flow}
+all.acct.use1.alarm -> all.acct.mid.dns: "luồng dữ liệu\ncủa alarm" {class: control-flow}
+all.acct.mid.dns -> all.acct.aps1.db: "PRIMARY khi khoẻ" {class: control-flow}
+all.acct.mid.dns -> all.acct.use1.replica: "SECONDARY" {class: control-flow}

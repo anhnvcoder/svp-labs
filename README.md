@@ -31,23 +31,72 @@ make docs-check               # markdownlint-cli2 và lychee --offline trên m�
 make tf-check DIRS=<bài>      # fmt, validate, tflint, trivy, terraform test với provider giả
 make go-test                  # gofmt, go vet, go test -race
 make shellcheck DIRS=<bài>    # shellcheck trên scripts/*.sh
+make diagrams-check           # SVG đã commit ở docs/diagrams/ khớp nguồn .d2
+make inventory-check          # trang inventory của năm lab SAP và sơ đồ của nó khớp plan với provider giả
 make help                     # liệt kê target
 ```
 
+Lệnh `terraform` của buổi chạy thật chạm account AWS, do người học chạy, theo khuôn ở
+[`docs/terraform-commands.md`](docs/terraform-commands.md).
+
 ## Các bài lab
+
+### Lab SAP
+
+Năm lab dựng trên account AWS của người học để có số đo cho đề SAP-C03, xếp theo thứ tự chạy gợi ý. Phí, thời gian chép từ bảng tóm
+tắt đầu README của từng lab, nơi có cách tính và nguồn; thời gian là ước tính, chưa đo.
+
+| # | Bài | Hỏi gì | Phí (USD mỗi giờ khi dựng; mỗi buổi) | Thời gian (một buổi) |
+| --- | --- | --- | --- | --- |
+| 1 | [`serverless-variant`][sv] | Hai luồng svp làm serverless: được, mất gì so với EKS | Theo lượng dùng, trần ~1,4; ~0,2 | ~70 phút |
+| 2 | [`dms-migration`][dms] | DMS sang RDS: full load, CDC trễ, cutover dừng ghi bao lâu | ~0,091; ~0,33 (buổi 3 giờ) | ~1 giờ 45 |
+| 3 | [`multi-region-dr`][dr] | Mất region chính: RTO, RPO của pilot light so với backup | ~0,080; ~0,9 (buổi 3 giờ) | ~3 giờ |
+| 4 | [`data-scaling`][ds] | Mở rộng quá một RDS instance | ~0,415, ~0,143–0,181; ≤ 1,23, ≤ 0,37 | ≈ 2 giờ, ≈ 67 phút |
+| 5 | [`multi-account-networking`][net] | prd tách non-prd thật không; NAT, DNS dùng chung | ~1,12, ~1,80; ~3,97, ~6,2 | ~3 giờ |
+
+- `data-scaling` có hai root chạy ở hai buổi riêng; mỗi ô phí, thời gian ghi `postgres/` trước, `valkey/` sau. Phần local
+  `scripts/partition.sh` không dùng AWS: phí 0, ~10 phút.
+- `multi-account-networking`: ô phí ghi lõi (root `core`) trước, cả hybrid (`core` cùng `hybrid`) sau, buổi 3 giờ. Account
+  `svp-network` để không tốn thêm ~2,2 USD mỗi tháng.
+
+Vì sao thứ tự này:
+
+- Không lab nào là điều kiện trước của lab khác: mục `Điều kiện trước` của cả năm ghi không cần lab chạy trước. Thứ tự vì vậy đi từ
+  rẻ, ngắn tới đắt, dài: buổi đầu làm quen [khuôn lệnh](docs/terraform-commands.md) và thư mục buổi với phí nhỏ nhất.
+- Bốn lab đầu chỉ cần account `svp-stg` và profile `anhnv-stg` của `svp-infra`. `multi-account-networking` cần thêm account
+  `svp-network`, tạo một lần ở bước 0 (root `account`), sống qua các buổi và tốn phí cả khi để không. Chạy nó cuối để account sống
+  ngắn nhất; đóng account khi bài không còn buổi nào.
+- Trong `multi-account-networking`: `account` (một lần), rồi `core`, rồi `hybrid`, vì `hybrid` tra tài nguyên của `core`; gỡ
+  `hybrid` trước `core`.
+- Trong `data-scaling`: `postgres/` và `valkey/` không đọc tài nguyên của nhau, nên hai buổi chạy theo thứ tự nào cũng được.
+
+### Bài đóng băng
+
+Dựng một lần, kết luận đã ghi vào ADR của `svp-backend`, không bảo trì tiếp.
 
 | Bài | Hỏi gì | Kết luận ở |
 | --- | --- | --- |
-| [`dora/`](https://github.com/anhnvcoder/svp-labs/tree/main/dora) | Năm chỉ số DORA tính được từ bản ghi Deployment `stg` của `svp-gitops` không (bản đóng băng của `dora.sh`) | [ADR-0028](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0028-dora-metrics.md), bị [ADR-0037](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0037-mainpath-standard-tools.md) thay |
-| [`attest-spike/`](https://github.com/anhnvcoder/svp-labs/tree/main/attest-spike) | Kyverno có xác minh được provenance của `actions/attest` (Sigstore bundle) không, và một policy nhận cả định dạng cũ lẫn mới được không | [ADR-0040](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md) |
-| [`bundle-spike/`](https://github.com/anhnvcoder/svp-labs/tree/main/bundle-spike) | Một bản phát hành keyless toàn Sigstore bundle qua template thật `svp-policy` được không, và rescan `vuln` hằng ngày làm gì với bundle | [ADR-0040](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md) |
-| [`reusable-spike/`](https://github.com/anhnvcoder/svp-labs/tree/main/reusable-spike) | Reusable workflow hay composite action thay được checkout ghim script của repo khác không | [ADR-0040](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md) |
-| [`drills/`](https://github.com/anhnvcoder/svp-labs/tree/main/drills) | Diễn tập k8s đo một lần (KEDA, PDB, canary, DR Postgres, thời gian giao hàng, quan sát web), diễn tập compose (kill worker, event trùng, breaker, rate limit, upload bỏ dở, cảnh báo tới GlitchTip, game day, đo `READY` và độ tươi feed) và kịch bản runner của `verify.yml` (bản đóng băng, cách chạy lại ở commit ghim) | [ADR-0039](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md), [ADR-0050](https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0050-bash-to-standard-tools.md) (diễn tập compose) |
-| [`multi-account-networking/`](https://github.com/anhnvcoder/svp-labs/tree/main/multi-account-networking) | Gói tin giữa VPC của nhiều account qua Transit Gateway đi đường nào, prd và non-prd có tách thật không, NAT và DNS riêng dùng chung thế nào, tốn bao nhiêu; hybrid: on-prem qua Site-to-Site VPN tới env nào, PrivateLink có nối được hai account bị tách không | — |
-| [`serverless-variant/`](https://github.com/anhnvcoder/svp-labs/tree/main/serverless-variant) | Lượt xem và điều phối transcode làm bằng dịch vụ serverless (API Gateway, SQS, Lambda, DynamoDB, S3, EventBridge, Step Functions) thì được và mất gì so với EKS: độ trễ, đúng một lần, đường lỗi, chi phí mỗi triệu event | — |
-| [`multi-region-dr/`](https://github.com/anhnvcoder/svp-labs/tree/main/multi-region-dr) | Mất cả region chính, tầng dữ liệu phục vụ lại ở region thứ hai sau bao lâu (RTO) và mất bao nhiêu dữ liệu (RPO), khi dùng read replica chéo region so với restore từ backup đã sao sang region kia | — |
-| [`dms-migration/`](https://github.com/anhnvcoder/svp-labs/tree/main/dms-migration) | Chuyển database từ PostgreSQL tự quản sang RDS bằng DMS thì full load mất bao lâu, CDC trễ bao nhiêu, cutover dừng ghi bao lâu, và bước nào chiếm phần lớn downtime | — |
-| [`data-scaling/`](https://github.com/anhnvcoder/svp-labs/tree/main/data-scaling) | Aurora và RDS PostgreSQL có read replica dưới tải ghi đều thì replica trễ bao nhiêu và failover làm client lỗi bao lâu; RDS Proxy làm database thấy bao nhiêu kết nối và tốn bao nhiêu; Valkey cluster mode bật so với tắt thì client thấy gì, reshard và failover lỗi bao lâu; chia đọc ghi ở client có giảm p95 không; partition `timeline` so với `DELETE` theo lô và `DETACH` khi dọn dữ liệu | — |
+| [`dora`][dora] | Năm chỉ số DORA tính được từ bản ghi Deployment `stg` không | [ADR-0028][adr-0028], bị [ADR-0037][adr-0037] thay |
+| [`attest-spike`][attest] | Kyverno có xác minh được provenance `actions/attest` (Sigstore bundle) không | [ADR-0040][adr-0040] |
+| [`bundle-spike`][bundle] | Bản keyless toàn Sigstore bundle có qua Kyverno không; rescan `vuln` làm gì | [ADR-0040][adr-0040] |
+| [`reusable-spike`][reusable] | Reusable workflow hay composite action thay checkout ghim script của repo khác | [ADR-0040][adr-0040] |
+| [`drills`][drills] | Diễn tập k8s, compose, kịch bản runner `verify.yml`, đo một lần | [ADR-0039][adr-0039], [ADR-0050][adr-0050] |
+
+[sv]: serverless-variant/
+[dms]: dms-migration/
+[dr]: multi-region-dr/
+[ds]: data-scaling/
+[net]: multi-account-networking/
+[dora]: dora/
+[attest]: attest-spike/
+[bundle]: bundle-spike/
+[reusable]: reusable-spike/
+[drills]: drills/
+[adr-0028]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0028-dora-metrics.md
+[adr-0037]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0037-mainpath-standard-tools.md
+[adr-0039]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0039-mainpath-drills-scan-gate-sourcemaps.md
+[adr-0040]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md
+[adr-0050]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0050-bash-to-standard-tools.md
 
 ## Đóng góp
 

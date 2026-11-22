@@ -1,0 +1,155 @@
+# Detail of the root hybrid (multi-account-networking/hybrid, modules onprem-site, site-vpn, dns-resolver,
+# privatelink-provider, privatelink-consumer) on top of core: the simulated site behind the VPN, DNS both ways through
+# the Resolver endpoints, and PrivateLink from stg to a service of prd. The Profile that carries the forward rule to
+# both spokes is drawn in core.d2.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+# An icon node: the service's official icon with its name under it, dark text on the block's pale fill in both themes.
+classes: {
+  svc: {
+    shape: image
+    width: 48
+    height: 48
+    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+  }
+}
+
+title: "On-prem tới được gì qua VPN, DNS đi hai chiều ra sao, và stg gọi prd bằng đường nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  net: "svp-network" {
+    class: account
+    label.near: top-left
+    grid-rows: 2
+    grid-columns: 2
+    horizontal-gap: 100
+    vertical-gap: 170
+
+    vpn: "VPN svp-lab-net-vpn" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Site-to-Site VPN" {class: svc; icon: ../icons/site-to-site-vpn.svg}
+      s: "hai tunnel IKEv2 · tĩnh\n192.168.0.0/20 tới 10.64.0.0/16" {class: sub}
+      t: "PSK trong Secrets Manager" {class: sub}
+      r: "modules/site-vpn" {class: root}
+    }
+    tgw: "Transit Gateway svp-lab-net" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Transit Gateway" {class: svc; icon: ../icons/transit-gateway.svg}
+      s: "rt-nonprd: 192.168.0.0/20\n→ VPN" {class: sub}
+      t: "rt-prd: 192.168.0.0/20\nblackhole" {class: sub}
+      r: "modules/tgw-hub · site-vpn" {class: root}
+    }
+    site: "On-prem mô phỏng" {
+      class: onprem
+      label.near: bottom-left
+      grid-rows: 1
+      grid-columns: 1
+      grid-gap: 30
+      dc: "VPC svp-lab-net-onprem" {
+        class: workload
+        grid-rows: 4
+        grid-gap: 24
+        vertical-gap: 6
+        i: "EC2 router · host" {class: svc; icon: ../icons/ec2.svg}
+        s: "192.168.0.0/20 · router\n192.168.0.10: Libreswan, BIND" {class: sub}
+        t: "host 192.168.1.10: route\n10.64.0.0/16 → router" {class: sub}
+        r: "modules/onprem-site" {class: root}
+      }
+    }
+    resolver: "Resolver endpoint" {
+      class: workload
+      grid-rows: 5
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Route 53" {class: svc; icon: ../icons/route53.svg}
+      s: "VPC shared, subnet\n10.64.18.0/28" {class: sub}
+      t: "inbound .4 .5 · outbound\n.6 .7 → 192.168.0.10:53" {class: sub}
+      u: "rule onprem.svp.example\nqua Profile tới stg, prd" {class: sub}
+      r: "modules/dns-resolver" {class: root}
+    }
+  }
+
+  g: "" {width: 120; style: {stroke: transparent; fill: transparent}}
+
+  spokes: "" {
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    stg: "svp-stg" {
+      class: account
+      label.near: top-left
+      grid-rows: 2
+      grid-columns: 1
+      vertical-gap: 70
+      probe: "probe-stg" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "EC2" {class: svc; icon: ../icons/ec2.svg}
+        s: "10.64.32.0/20 · nhận ping,\nTCP 80 từ on-prem" {class: sub}
+        r: "modules/probe · hybrid/main.tf" {class: root}
+      }
+      ep: "svp-lab-net-svc-stg" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "Interface endpoint" {class: svc; icon: ../icons/privatelink.svg}
+        s: "TCP 80 từ VPC stg ·\nkhông private DNS" {class: sub}
+        r: "modules/privatelink-consumer" {class: root}
+      }
+    }
+    sp: "" {height: 50; style: {stroke: transparent; fill: transparent}}
+    prd: "svp-prd" {
+      class: account
+      label.near: bottom-left
+      grid-rows: 2
+      grid-columns: 1
+      vertical-gap: 70
+      nlb: "NLB svp-lab-net-svc" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "ELB" {class: svc; icon: ../icons/elb.svg}
+        s: "internal · endpoint service:\nchỉ stg, chấp nhận từng\nendpoint" {class: sub}
+        r: "modules/privatelink-provider" {class: root}
+      }
+      probe: "probe-prd" {
+        class: workload
+        grid-rows: 3
+        grid-gap: 24
+        vertical-gap: 6
+        i: "EC2" {class: svc; icon: ../icons/ec2.svg}
+        s: "HTTP cổng 80, chạy\nbằng SSM association" {class: sub}
+        r: "modules/privatelink-provider" {class: root}
+      }
+    }
+  }
+}
+
+all.net.site -> all.net.vpn: "IPsec qua\nInternet" {class: data-flow}
+all.net.vpn -> all.net.tgw: "attachment\nVPN" {class: data-flow}
+all.net.tgw -> all.spokes.stg.probe: "10.64.32.0/20" {class: data-flow}
+all.net.resolver <-> all.net.tgw: "DNS 53" {class: data-flow}
+all.spokes.stg.probe -> all.spokes.stg.ep: "curl" {class: data-flow}
+all.spokes.stg.ep -> all.spokes.prd.nlb: "PrivateLink" {class: data-flow}
+all.spokes.prd.nlb -> all.spokes.prd.probe: "TCP 80" {class: data-flow}

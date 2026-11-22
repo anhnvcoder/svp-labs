@@ -15,6 +15,12 @@ on:
       - "**/go.mod"
       - "**/go.sum"
       - "**/scripts/*.sh"
+      - "**/*.auto.tfvars.example"
+      - scripts/inventory/**
+      - "**/docs/inventory.md"
+      - docs/diagrams/inventory/**
+      - docs/diagrams/icons/**
+      - docs/diagrams/tokens.d2
       - Makefile
       - .tflint.hcl
       - .github/workflows/labs.yml
@@ -44,6 +50,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - run: make trivy test shellcheck script-test
+      - run: make inventory-check
 
   go:
     runs-on: ubuntu-24.04

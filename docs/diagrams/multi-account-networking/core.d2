@@ -1,0 +1,181 @@
+# Detail of the root core (multi-account-networking/core, modules tgw-hub, egress-vpc, spoke-vpc, dns-hub, dns-spoke):
+# the three route tables of the transit gateway and their static routes, the subnets of the egress VPC, and which
+# private zone reaches which spoke VPC. prd sits above rt-prd and stg above rt-nonprd, so no two arrows cross.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+# An icon node: the service's official icon with its name under it, dark text on the block's pale fill in both themes.
+classes: {
+  svc: {
+    shape: image
+    width: 48
+    height: 48
+    style: {font-color: "#1A1A1A"; font-size: 13; bold: false}
+  }
+}
+
+title: "Route table nào đưa gói của mỗi VPC đi đâu, và zone riêng nào tới VPC nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 5
+  grid-columns: 1
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  spokes: "" {
+    grid-rows: 1
+    grid-columns: 4
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    prd: "svp-prd" {
+      class: account
+      label.near: top-left
+      vpc: "VPC svp-lab-net-prd" {
+        class: workload
+        grid-rows: 4
+        grid-gap: 24
+        vertical-gap: 6
+        i: "VPC · EC2" {class: svc; icon: ../icons/vpc.svg}
+        s: "10.64.48.0/20 · probe-prd\nworkload: 0.0.0.0/0 → TGW" {class: sub}
+        t: "gắn Profile; không gắn\nzone nonprd" {class: sub}
+        r: "modules/spoke-vpc · dns-spoke" {class: root}
+      }
+    }
+    s1: "" {width: 330; style: {stroke: transparent; fill: transparent}}
+    stg: "svp-stg" {
+      class: account
+      label.near: top-left
+      vpc: "VPC svp-lab-net-stg" {
+        class: workload
+        grid-rows: 4
+        grid-gap: 24
+        vertical-gap: 6
+        i: "VPC · EC2" {class: svc; icon: ../icons/vpc.svg}
+        s: "10.64.32.0/20 · probe-stg\nworkload: 0.0.0.0/0 → TGW" {class: sub}
+        t: "gắn Profile và zone nonprd" {class: sub}
+        r: "modules/spoke-vpc · dns-spoke" {class: root}
+      }
+    }
+    s2: "" {width: 330; style: {stroke: transparent; fill: transparent}}
+  }
+
+  vsp: "" {height: 170; style: {stroke: transparent; fill: transparent}}
+
+  net: "svp-network" {
+    class: account
+    label.near: bottom-left
+    grid-rows: 2
+    grid-columns: 4
+    horizontal-gap: 90
+    vertical-gap: 90
+
+    rtp: "rt-prd" {
+      class: workload
+      grid-rows: 5
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Transit Gateway" {class: svc; icon: ../icons/transit-gateway.svg}
+      s: "gắn: prd" {class: sub}
+      t: "0.0.0.0/0 → egress\n10.64.48.0/20 → prd" {class: sub}
+      u: "blackhole 10.64.16.0/20,\n10.64.32.0/20" {class: sub}
+      r: "modules/tgw-hub" {class: root}
+    }
+    dns: "DNS riêng" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Route 53" {class: svc; icon: ../icons/route53.svg}
+      s: "Profile svp-lab-net chứa PHZ\nnet.svp.example → stg, prd" {class: sub}
+      t: "PHZ nonprd.svp.example:\nauthorization → chỉ stg" {class: sub}
+      r: "modules/dns-hub" {class: root}
+    }
+    rtn: "rt-nonprd" {
+      class: workload
+      grid-rows: 5
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Transit Gateway" {class: svc; icon: ../icons/transit-gateway.svg}
+      s: "gắn: stg, shared" {class: sub}
+      t: "0.0.0.0/0 → egress\n10.64.16.0/20 → shared\n10.64.32.0/20 → stg" {class: sub}
+      u: "blackhole 10.64.48.0/20" {class: sub}
+      r: "modules/tgw-hub" {class: root}
+    }
+    shared: "VPC svp-lab-net-shared" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "VPC" {class: svc; icon: ../icons/vpc.svg}
+      s: "10.64.16.0/20 · hai PHZ\ngắn VPC này" {class: sub}
+      t: "workload 10.64.16.0/24 chia\ncho stg qua RAM · probe-shared\ncủa stg" {class: sub}
+      r: "modules/spoke-vpc · ram-share" {class: root}
+    }
+    probe: "VPC egress: subnet probe" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "EC2" {class: svc; icon: ../icons/ec2.svg}
+      s: "10.64.2.0/24 · probe-egress\n0.0.0.0/0 → NAT\n10.64.0.0/16 → TGW" {class: sub}
+      r: "modules/egress-vpc · probe" {class: root}
+    }
+    tgwsub: "VPC egress: subnet tgw" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "VPC" {class: svc; icon: ../icons/vpc.svg}
+      s: "10.64.1.0/28 · attachment\n0.0.0.0/0 → NAT" {class: sub}
+      r: "modules/egress-vpc" {class: root}
+    }
+    pub: "VPC egress: subnet public" {
+      class: workload
+      grid-rows: 3
+      grid-gap: 24
+      vertical-gap: 6
+      i: "NAT Gateway · IGW" {class: svc; icon: ../icons/vpc.svg}
+      s: "10.64.0.0/24 · NAT, EIP\n0.0.0.0/0 → IGW\n10.64.0.0/16 → TGW" {class: sub}
+      r: "modules/egress-vpc" {class: root}
+    }
+    rte: "rt-egress" {
+      class: workload
+      grid-rows: 4
+      grid-gap: 24
+      vertical-gap: 6
+      i: "Transit Gateway" {class: svc; icon: ../icons/transit-gateway.svg}
+      s: "gắn: egress · đường về" {class: sub}
+      t: "10.64.16.0/20 → shared\n10.64.32.0/20 → stg\n10.64.48.0/20 → prd" {class: sub}
+      r: "modules/tgw-hub" {class: root}
+    }
+  }
+  vsp2: "" {height: 70; style: {stroke: transparent; fill: transparent}}
+  netrow: "" {
+    grid-rows: 1
+    grid-columns: 2
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    pad: "" {width: 714; style: {stroke: transparent; fill: transparent}}
+    internet: "Internet" {
+      class: workload
+      grid-rows: 1
+      grid-gap: 24
+      s: "checkip.amazonaws.com" {class: sub}
+    }
+  }
+}
+
+all.spokes.prd.vpc -> all.net.rtp: "attachment prd" {class: data-flow}
+all.spokes.stg.vpc -> all.net.rtn: "attachment stg" {class: data-flow}
+all.net.shared -> all.net.rtn: "attachment\nshared" {class: data-flow}
+all.net.rtp -> all.net.tgwsub: "0.0.0.0/0" {class: data-flow}
+all.net.rtn -> all.net.tgwsub: "0.0.0.0/0" {class: data-flow}
+all.net.tgwsub -> all.net.pub: "NAT" {class: data-flow}
+all.net.pub -> all.net.rte: "10.64.0.0/16" {class: data-flow}
+all.net.dns -> all.spokes.prd.vpc: "Profile" {class: control-flow}
+all.net.dns -> all.spokes.stg.vpc: "Profile,\nzone nonprd" {class: control-flow}
+all.net.pub -> all.netrow.internet: {class: data-flow}

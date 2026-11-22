@@ -1,4 +1,5 @@
-# Markdown style and links of this repository (make docs-check); job docs is the check the ruleset of main requires.
+# Markdown style and links of this repository (make docs-check) and the diagrams against their D2 sources (make
+# diagrams-check); job docs is the check the ruleset of main requires. Both pull images pinned by digest.
 # Public repository, a fork's pull request runs this file: no secret, no id-token, no pull_request_target;
 # contents: read; the one action is GitHub's own, pinned to a full commit SHA; checkout with persist-credentials: false.
 name: docs
@@ -27,3 +28,4 @@ jobs:
         with:
           persist-credentials: false
       - run: make docs-check
+      - run: make diagrams-check

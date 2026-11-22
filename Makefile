@@ -19,6 +19,9 @@ TFLINT_IMAGE     := ghcr.io/terraform-linters/tflint:v0.65.0@sha256:2788f4d4fc66
 TRIVY_IMAGE      := ghcr.io/aquasecurity/trivy:0.76.0@sha256:2416d1f74045b57274df1a340eee6b510cacd73c66a6ccb8da092b117eb7d222
 # renovate: datasource=docker depName=koalaman/shellcheck
 SHELLCHECK_IMAGE := koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d
+# D2 from its official image, a multi-architecture index: the SVGs come out byte for byte the same on arm64 and amd64.
+# renovate: datasource=docker depName=d2lang/d2
+D2_IMAGE         := d2lang/d2:v0.9.0@sha256:0f9237e0213338415de5ef7436c92450ddd04e0e6e7df2db3f41387322df97b9
 
 # Platforms whose provider hashes `make lock` writes into the lock file of a root: the Mac that runs plan and apply,
 # and the two Linux architectures of CI and of the images.
@@ -102,12 +105,13 @@ GO := env GOTOOLCHAIN=local go
 
 .DEFAULT_GOAL := help
 
-.PHONY: help check tf-check fmt-check fmt validate tflint trivy test test-guard lock go-test lambda-build shellcheck script-test docs-check
+.PHONY: help check tf-check fmt-check fmt validate tflint trivy test test-guard lock go-test lambda-build shellcheck script-test docs-check \
+	diagrams diagrams-check inventory inventory-check
 
 help: ## List the targets
-	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-12s %s\n", $$1, $$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
-check: docs-check test-guard tf-check go-test shellcheck script-test ## Every static check of the repository
+check: docs-check diagrams-check inventory-check test-guard tf-check go-test shellcheck script-test ## Every static check of the repository
 
 tf-check: fmt-check validate tflint trivy test ## Every Terraform check on DIRS='<dir> ...' (default: the whole repository)
 
@@ -310,6 +314,16 @@ lock: ## Write the lock file of each root below DIRS (default: every root) with 
 	  $(TF_DATA) providers lock -no-color $(addprefix -platform=,$(LOCK_PLATFORMS)) || { echo "FAIL: providers lock $$d" >&2; exit 1; }; \
 	done
 
+# What each root of the SAP labs creates on an empty account, from a plan of terraform test against mock providers
+# (scripts/inventory/): <lab>/docs/inventory.md and docs/diagrams/inventory/. The plans run on a copy of the labs
+# without personal files, under the rules of make test (no network but init, no credential); scripts/inventory-test.sh
+# checks them. Needs jq.
+inventory: ## Write <lab>/docs/inventory.md and docs/diagrams/inventory/ from mock plans of every root (no network, no credential)
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash scripts/inventory.sh write
+
+inventory-check: ## Fails, naming the file, when an inventory page or a diagram of it differs from what make inventory writes
+	@TERRAFORM_IMAGE='$(TERRAFORM_IMAGE)' D2_IMAGE='$(D2_IMAGE)' bash scripts/inventory.sh check
+
 go-test: ## gofmt -l, go vet, go test -race in each Go module below DIRS (default: the repository but drills/; host Go)
 	@mods=$$($(GO_MODULES)) || exit 1; [ -n "$$mods" ] || { echo "go-test: no Go module"; exit 0; }; \
 	for m in $$mods; do \
@@ -371,3 +385,75 @@ docs-check: ## markdownlint-cli2 + lychee --offline on the Markdown (DOCS='<file
 	env -u DOCKER_DEFAULT_PLATFORM docker run --rm --network none -v "$(CURDIR):/repo:ro" --workdir /repo \
 		$(LYCHEE_IMAGE) --offline --include-fragments "$$@" || rc=1; \
 	exit $$rc
+
+# The recipe of the diagrams targets of svp-infra's Makefile, with the sources one directory down: each lab's diagrams
+# are docs/diagrams/<lab>/<name>.d2, rendered beside it to <name>.svg (theme 0) and <name>-dark.svg (theme 200).
+# inventory/ (make inventory writes and checks it) and icons/ hold no lab diagram. --scale 1 keeps the SVG's own size.
+# NAMES='<lab>' or '<lab>/<name>' limits both targets; LAYOUT, OUT=<dir in repo>, SUFFIX and PNG=1 are for a trial.
+DIAGRAMS_DIR := docs/diagrams
+NAMES ?=
+OUT ?=
+SUFFIX ?=
+LAYOUT ?=
+PNG ?=
+
+# Sets srcs to the .d2 files to render, or exits naming the NAMES entry that is outside docs/diagrams or has no .d2.
+DIAGRAM_SRCS = \
+	if [ -n '$(NAMES)' ]; then srcs=; \
+	  for n in $(NAMES); do \
+	    n=$${n%/}; \
+	    case "$$n" in (/*|.|./*|..|../*|*/.|*/./*|*/..|*/../*|*/*/*) \
+	      echo "NAMES: $$n is not <lab> or <lab>/<name> under $(DIAGRAMS_DIR)" >&2; exit 1;; esac; \
+	    case "$$n" in (inventory|inventory/*|icons|icons/*) \
+	      echo "NAMES: $$n holds no lab diagram (make inventory owns inventory/)" >&2; exit 1;; esac; \
+	    case "$$n" in (*/*) found=$$(ls "$(DIAGRAMS_DIR)/$$n.d2" 2>/dev/null);; (*) found=$$(ls "$(DIAGRAMS_DIR)/$$n/"*.d2 2>/dev/null);; esac; \
+	    [ -n "$$found" ] || { echo "NAMES: no .d2 file for $$n in $(DIAGRAMS_DIR)" >&2; exit 1; }; \
+	    srcs="$$srcs $$found"; \
+	  done; \
+	else srcs=$$(find $(DIAGRAMS_DIR) -mindepth 2 -maxdepth 2 -name '*.d2' ! -path '$(DIAGRAMS_DIR)/inventory/*' \
+	  ! -path '$(DIAGRAMS_DIR)/icons/*' | sort); fi
+
+# Renders every diagram twice, <lab>/<name>.d2 to $$out/<lab>/<name>$$suffix.<ext> in theme 0 and to
+# <name>$$suffix-dark.<ext> in theme 200, with $$out, $$layout, $$suffix and $$png set by the caller. The container has
+# no network; the whole of docs/diagrams is mounted so that ../tokens and ../icons resolve.
+D2_RENDER = \
+	for f in $$srcs; do \
+	  rel=$${f\#$(DIAGRAMS_DIR)/}; rel=$${rel%.d2}; echo "d2 $$rel"; \
+	  mkdir -p "$$out/$${rel%/*}" || exit 1; \
+	  for variant in light dark; do \
+	    theme=0; tail=; [ $$variant = light ] || { theme=200; tail=-dark; }; \
+	    for ext in svg $$png; do \
+	      msg=$$($(DOCKER) --network none --entrypoint d2 -v "$(CURDIR)/$(DIAGRAMS_DIR):/work:ro" -v "$$out:/out" -w /work \
+	        $(D2_IMAGE) --theme $$theme --scale 1 $$layout "$$rel.d2" "/out/$$rel$$suffix$$tail.$$ext" 2>&1) || { echo "$$msg" >&2; echo "FAIL: d2 $$f" >&2; exit 1; }; \
+	    done; \
+	  done; \
+	done
+
+diagrams: ## D2 to SVG (light and -dark) of docs/diagrams/<lab>/*.d2 (NAMES=, LAYOUT=, OUT=<dir>, SUFFIX=, PNG=1)
+	@$(DIAGRAM_SRCS); [ -n "$$srcs" ] || { echo "diagrams: no .d2 file"; exit 0; }; \
+	dir=$${OUT:-$(DIAGRAMS_DIR)}; \
+	case "$$dir" in (/*|..|../*|*/..|*/../*) echo "OUT: $$dir is outside this repository; give a path relative to it" >&2; exit 1;; esac; \
+	case "$$SUFFIX" in (*/*) echo "SUFFIX: no slash in a file name" >&2; exit 1;; esac; \
+	mkdir -p "$$dir" && out=$$(cd "$$dir" && pwd) || exit 1; \
+	layout=; [ -z "$$LAYOUT" ] || layout="--layout=$$LAYOUT"; suffix=$$SUFFIX; png=; [ -z "$$PNG" ] || png=png; \
+	$(D2_RENDER)
+
+# Without NAMES the orphan scan runs even when no .d2 is left, so an SVG whose source was deleted still fails.
+diagrams-check: ## Fails, naming the file, when a committed SVG (light or -dark) differs from its .d2's render or has no .d2
+	@$(DIAGRAM_SRCS); rc=0; \
+	if [ -z "$$srcs" ]; then echo "diagrams-check: no .d2 file"; \
+	else \
+	  out=$$(mktemp -d) || exit 1; trap 'rm -rf "$$out"' EXIT; layout=; suffix=; png=; \
+	  $(D2_RENDER); \
+	  for f in $$srcs; do \
+	    for tail in "" -dark; do \
+	      svg="$${f%.d2}$$tail.svg"; \
+	      cmp -s "$$out/$${svg#$(DIAGRAMS_DIR)/}" "$$svg" || { echo "FAIL: $$svg is out of date or missing (run make diagrams)" >&2; rc=1; }; \
+	    done; \
+	  done; \
+	fi; \
+	[ -n '$(NAMES)' ] || for svg in $$(find $(DIAGRAMS_DIR) -mindepth 2 -maxdepth 2 -name '*.svg' \
+	  ! -path '$(DIAGRAMS_DIR)/inventory/*' ! -path '$(DIAGRAMS_DIR)/icons/*' | sort); do \
+	  src="$${svg%.svg}"; src="$${src%-dark}.d2"; \
+	  [ -f "$$src" ] || { echo "FAIL: $$svg has no .d2 source (restore it, or drop the SVG)" >&2; rc=1; }; \
+	done; exit $$rc

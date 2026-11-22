@@ -1,10 +1,16 @@
 # Lab `dms-migration`: svp chạy on-prem, chuyển database engagement sang RDS bằng DMS
 
-Bài giả định svp đang chạy trong data center của mình: database `svp_engagement` là PostgreSQL 17 tự quản trên một máy.
-Bài dựng "on-prem" đó bằng một EC2 trong VPC riêng, nối sang VPC phía AWS bằng VPC peering, rồi chuyển database sang RDS
-for PostgreSQL bằng AWS DMS: full load, CDC dưới tải ghi đều, cutover có đo downtime. Trang
-[`docs/migration-strategies.md`](docs/migration-strategies.md) đặt bài vào bức tranh chung: 7 chiến lược, MGN, DataSync,
-Snow, Migration Hub áp vào svp.
+Bài giả định database `svp_engagement` của svp là PostgreSQL 17 tự quản trong data center, và dựng "on-prem" đó bằng một EC2
+trong VPC riêng nối sang VPC phía AWS bằng VPC peering. AWS DMS chuyển database sang RDS for PostgreSQL: full load, CDC dưới tải
+ghi đều, rồi cutover có đo downtime. Trang [`docs/migration-strategies.md`](docs/migration-strategies.md) đặt bài vào bức tranh
+chung: 7 chiến lược, MGN, DataSync, Snow, Migration Hub áp vào svp.
+
+| | |
+| --- | --- |
+| Dựng | Một root ở `svp-stg`, `ap-southeast-1`: VPC on-prem có EC2 PostgreSQL 17, VPC peering, VPC phía AWS có DMS và RDS |
+| Trả lời | Full load mất bao lâu, CDC trễ bao nhiêu dưới tải, cutover dừng ghi bao lâu và bước nào chiếm phần lớn |
+| Phí | ~0,091 USD mỗi giờ khi dựng; ~0,33 USD mỗi buổi 3 giờ ([Chi phí](#chi-phí)) |
+| Thời gian | Ước tính, chưa đo: dựng ~25 phút, đo ~60 phút, gỡ và quét ~20 phút; ~1 giờ 45, trong buổi 3 giờ ([Chạy buổi](#chạy-buổi)) |
 
 ## Câu hỏi
 
@@ -20,37 +26,19 @@ Snow, Migration Hub áp vào svp.
 
 ## Thiết kế
 
-```mermaid
-flowchart LR
-    subgraph onprem["VPC svp-lab-dms-onprem 192.168.16.0/20, vai on-prem"]
-        src[("svp-lab-dms-source<br/>EC2 t4g.micro, PostgreSQL 17<br/>pgload.sh: tải, độ trễ, cutover")]
-    end
-    subgraph awsside["VPC svp-lab-dms-aws 10.66.0.0/20, không route ra Internet"]
-        dms["svp-lab-dms<br/>DMS replication instance dms.t3.micro"]
-        tgt[("svp-lab-dms-target<br/>RDS PostgreSQL 17, db.t4g.micro")]
-        vpce["interface endpoint Secrets Manager<br/>svp-lab-dms-secretsmanager"]
-    end
-    subgraph regional["Dịch vụ của ap-southeast-1"]
-        sm["secret svp-lab-dms-source, svp-lab-dms-target"]
-        ssm["tham số SSM /svp-lab-dms/source/svp_dms-password"]
-        cw["CloudWatch: metric AWS/DMS, log dms-tasks-svp-lab-dms"]
-    end
-    learner["Máy người học<br/>session.sh"]
-    onprem <-->|VPC peering svp-lab-dms-peering| awsside
-    dms -- "5432, TLS require, slot test_decoding" --> src
-    dms -- "5432, TLS verify-full" --> tgt
-    dms -- "443" --> vpce
-    vpce --> sm
-    src -- "5432, TLS verify-full, sau cutover" --> tgt
-    src -. "mật khẩu user DMS lúc boot" .-> ssm
-    src -. "secret đích, HTTPS công khai" .-> sm
-    dms -. "metric, log" .-> cw
-    learner -. "SSM Run Command, API DMS" .-> src
-```
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="../docs/diagrams/dms-migration/overview-dark.svg">
+  <img src="../docs/diagrams/dms-migration/overview.svg" alt="Dữ liệu của svp_engagement đi từ PostgreSQL on-prem sang RDS qua những gì?">
+</picture>
+
+Bên trái là phía on-prem mô phỏng, giữa là đường nối, bên phải là VPC phía AWS; hàng trên là dịch vụ của region nằm ngoài cả hai VPC.
+Mỗi khối là một tài nguyên của root, đúng tên trong Terraform. Mũi tên liền chở dữ liệu, mũi tên đứt là điều khiển hay đọc
+credential. Nguồn sơ đồ: [`overview.d2`](../docs/diagrams/dms-migration/overview.d2).
 
 EC2 `svp-lab-dms-source` đóng hai vai của on-prem: server PostgreSQL nguồn và máy ứng dụng ghi tải. `scripts/pgload.sh`
 trên nó ghi tải đều vào nguồn, đo độ trễ CDC và chạy cutover; mọi mốc thời gian lấy từ đồng hồ của chính máy này. Máy
-người học điều khiển bằng `scripts/session.sh` qua SSM Run Command và API DMS. Mọi instance đặt ở AZ đầu tiên của
+người học điều khiển bằng `scripts/session.sh` qua SSM Run Command và API DMS. Lệnh Run Command tới Systems Manager; agent SSM
+trên EC2 tự mở kết nối ra ngoài để nhận lệnh, nên EC2 không mở cổng SSH. Mọi instance đặt ở AZ đầu tiên của
 region: chuyển dữ liệu qua peering trong một AZ và giữa DMS với RDS, EC2 cùng AZ không tính tiền [N16], [P9].
 
 | Phần | Chọn | Phương án khác | Trạng thái ngành, nguồn |
@@ -111,8 +99,8 @@ Lý do các lựa chọn:
 - **Quyền của máy on-prem.** Role của EC2 đọc đúng tham số mật khẩu (giải mã chỉ qua Parameter Store, encryption context
   là ARN tham số [N17]), đọc đúng secret đích, và chỉ `dms:DescribeTableStatistics`, `dms:StopReplicationTask` trên đúng
   task này [N15].
-- **Role cấp account.** DMS tìm `dms-vpc-role` và `dms-cloudwatch-logs-role` theo đúng tên [N5]. Bước 2 của buổi kiểm
-  chúng có sẵn chưa; role có sẵn thì bài không tạo và destroy không xoá.
+- **Role cấp account.** DMS tìm `dms-vpc-role` và `dms-cloudwatch-logs-role` theo đúng tên [N5]. Mục
+  [Điều kiện trước](#điều-kiện-trước) kiểm chúng có sẵn chưa; role có sẵn thì bài không tạo và lượt gỡ không xoá.
 
 Mật khẩu và host:
 
@@ -130,9 +118,24 @@ Mật khẩu và host:
   3. Lệnh SSM Run Command đặt mật khẩu mới trong PostgreSQL bằng `ALTER ROLE`, đọc giá trị mới của tham số. Dán lại dòng
      `password of svp_dms set from ... version <n>`; `<n>` phải là version mới của tham số.
 
+  Lệnh của bước 2 và 3, theo khuôn của [Chạy buổi](#chạy-buổi). Bản văn bản của plan chỉ có hai tài nguyên đổi: tham số SSM
+  và version của secret `svp-lab-dms-source`; thấy tài nguyên khác thì dừng, không apply.
+
   ```sh
-  AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_rds_ca_bundle="$RDS_CA" \
-    terraform -chdir=dms-migration/terraform apply
+  AWS_PROFILE=anhnv-stg \
+  TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+  TF_VAR_rds_ca_bundle="$RDS_CA" \
+    terraform -chdir=dms-migration/terraform plan -input=false -out=dms-migration.tfplan
+  AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform show -no-color dms-migration.tfplan \
+    > "$SVP_LAB_SESSION_DIR/dms-migration-rotate-plan.txt"
+  grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/dms-migration-rotate-plan.txt"
+  ```
+
+  Đọc `dms-migration-rotate-plan.txt`; chỉ hai tài nguyên trên đổi thì sang khối sau, apply đúng file plan đã đọc rồi xoay:
+
+  ```sh
+  AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform apply -input=false dms-migration.tfplan \
+    && rm dms-migration/terraform/dms-migration.tfplan
   SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run password
   ```
 
@@ -157,6 +160,16 @@ Tải ghi: `pgload.sh start 40` ghi 40 câu mỗi giây vào nguồn, mỗi câu
 
 Sai số: độ trễ heartbeat là cận trên, lệch tới một chu kỳ hỏi (0,2 s) cộng thời gian mở kết nối TLS tới đích; một đồng
 hồ nên không có lệch đồng hồ. Metric CloudWatch có độ phân giải 60 s.
+
+## Tài nguyên
+
+Bài có một root. Số tài nguyên, chia theo phần và theo loại, ở trang [inventory](docs/inventory.md) (sinh từ plan trên provider giả).
+
+| Root | Việc | Inventory |
+| --- | --- | --- |
+| `dms-migration/terraform` | Hai VPC, peering, EC2 nguồn, RDS đích, hai secret, DMS (instance, endpoint, task) | [mục của root][inv-root] |
+
+[inv-root]: docs/inventory.md#dms-migrationterraform
 
 ## Chi phí
 
@@ -212,52 +225,113 @@ Mỗi buổi 3 giờ:
 So đường DMS tới Secrets Manager: endpoint một AZ 0,013 USD mỗi giờ; IP công khai cho replication instance 0,005 nhưng
 fail control `DMS.1`; NAT Gateway 0,059. So DMS Serverless: ít nhất 0,122 mỗi giờ so với 0,032 của instance kèm lưu trữ.
 
+## Điều kiện trước
+
+- [ ] **Trên máy:** AWS CLI v2, `jq`, `curl`, Terraform 1.15.
+- [ ] **Mã nguồn:** gốc repo `svp-labs` trên `main`, sau khi PR của bài đã merge. Mọi lệnh dưới đây chạy từ gốc repo.
+- [ ] **Profile** `anhnv-stg` (account `svp-stg`) đã ghi như trang
+  [thiết lập account của `svp-infra`](https://github.com/anhnvcoder/svp-infra/blob/main/docs/runbooks/accounts-setup.md); đăng nhập SSO một
+  lần cho mọi profile cùng phiên:
+
+  ```sh
+  AWS_PROFILE=anhnv-sso aws sso login --region us-east-1
+  ```
+
+- [ ] **Biến account:** `SVP_AWS_STG_ACCOUNT_ID` (12 số của `svp-stg`) export trong terminal, không ghi vào file nào. Script của bài
+  (`session.sh`, `sweep.sh`) đọc nó để kiểm account.
+- [ ] **Thư mục buổi** ([`terraform-commands.md`](../docs/terraform-commands.md#thư-mục-buổi)):
+
+  ```sh
+  export SVP_LAB_SESSION_DIR="$PWD/.session/dms-migration-$(date -u +%Y%m%dT%H%M%SZ)" && mkdir -p "$SVP_LAB_SESSION_DIR"
+  ```
+
+- [ ] **Kiểm account** trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
+
+  ```sh
+  AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
+  ```
+
+- [ ] **Hai role cấp account của DMS và `dms.auto.tfvars`.** Mỗi lệnh in ARN của role khi role có sẵn, hay lỗi `NoSuchEntity` khi
+  chưa có. Dán lại output.
+
+  ```sh
+  AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-vpc-role --query Role.Arn --output text \
+    --region ap-southeast-1
+  AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-cloudwatch-logs-role --query Role.Arn --output text \
+    --region ap-southeast-1
+  ```
+
+  - Không role nào có: bỏ qua, không tạo `dms.auto.tfvars`. Bài tạo cả hai và lượt gỡ xoá cả hai.
+  - Có ít nhất một role: chép file mẫu thành file cá nhân (git bỏ qua `*.auto.tfvars`), rồi giữ đúng dòng của role đã có, mỗi dòng
+    giá trị `false`: `create_dms_vpc_role = false` khi có `dms-vpc-role`, `create_dms_logs_role = false` khi có
+    `dms-cloudwatch-logs-role`; xoá dòng của role chưa có. Bài không tạo và lượt gỡ không xoá role có sẵn.
+
+    ```sh
+    cp dms-migration/terraform/dms.auto.tfvars.example dms-migration/terraform/dms.auto.tfvars
+    ```
+
+- [ ] **Bundle CA RDS của region** vào biến terminal `RDS_CA`; DMS kiểm cert của đích theo nó. Dán lại số dòng `BEGIN CERTIFICATE`
+  (lớn hơn 0). Terminal mới thì chạy lại lệnh này trước mọi lệnh `terraform` có `TF_VAR_rds_ca_bundle`.
+
+  ```sh
+  RDS_CA=$(curl -fsS https://truststore.pki.rds.amazonaws.com/ap-southeast-1/ap-southeast-1-bundle.pem)
+  grep -c 'BEGIN CERTIFICATE' <<<"$RDS_CA"
+  ```
+
+- [ ] **Lab chạy trước:** không cần. Bài dựng mạng riêng, không dùng tài nguyên của lab khác.
+
 ## Chạy buổi
 
-Máy người học cần AWS CLI v2, `jq`, `curl`, Terraform 1.15; chạy từ gốc repo `svp-labs`, sau khi PR của bài đã merge,
-trên `main`. Biến `SVP_AWS_STG_ACCOUNT_ID` (12 số của account `svp-stg`) export trong terminal, không ghi vào file nào.
-Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
+Lệnh `terraform` theo khuôn của [`docs/terraform-commands.md`](../docs/terraform-commands.md) (lý do từng phần ở đó). Buổi chạy trong
+account `svp-stg` bằng profile `anhnv-stg`. Thời gian ở tóm tắt là ước tính, chưa đo: apply ~15 phút (RDS và replication instance chiếm
+phần lớn) cộng vài phút chờ script boot; full load vài phút với 600 000 dòng; CDC chạy ít nhất 5 phút trước khi đo, lệnh `lag` ~1 phút;
+cutover tối đa 900 s mỗi cổng; gỡ ~15 phút cộng quét.
 
-1. Kiểm account trước lệnh ghi đầu tiên. Dán lại output; nó phải bằng `$SVP_AWS_STG_ACCOUNT_ID`.
-
-   ```sh
-   AWS_PROFILE=anhnv-stg aws sts get-caller-identity --query Account --output text --region ap-southeast-1
-   ```
-
-2. Kiểm hai role cấp account của DMS. Mỗi lệnh in ARN của role khi role có sẵn, hay lỗi `NoSuchEntity` khi chưa có. Dán
-   lại output. Có role nào thì chép `dms-migration/terraform/dms.auto.tfvars.example` thành `dms.auto.tfvars` cùng thư
-   mục và giữ dòng của role đó: bài không tạo và destroy không xoá nó. Không role nào có thì bỏ qua, bài tạo cả hai và
-   destroy xoá cả hai.
+1. **Init.** Root không có backend (state local); `init` chỉ tải provider theo lock file. Mong đợi `Terraform has been successfully
+   initialized!`.
 
    ```sh
-   AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-vpc-role --query Role.Arn --output text \
-     --region ap-southeast-1
-   AWS_PROFILE=anhnv-stg aws iam get-role --role-name dms-cloudwatch-logs-role --query Role.Arn --output text \
-     --region ap-southeast-1
+   AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform init -input=false
    ```
 
-3. Lấy bundle CA RDS của region vào biến terminal; DMS kiểm cert của đích theo nó. Dán lại số dòng `BEGIN CERTIFICATE`
-   (lớn hơn 0).
+2. **Plan** ra file, rồi bản văn bản vào thư mục buổi.
 
    ```sh
-   RDS_CA=$(curl -fsS https://truststore.pki.rds.amazonaws.com/ap-southeast-1/ap-southeast-1-bundle.pem)
-   grep -c 'BEGIN CERTIFICATE' <<<"$RDS_CA"
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_rds_ca_bundle="$RDS_CA" \
+     terraform -chdir=dms-migration/terraform plan -input=false -out=dms-migration.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform show -no-color dms-migration.tfplan \
+     > "$SVP_LAB_SESSION_DIR/dms-migration-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/dms-migration-plan.txt"
    ```
 
-4. Dựng hạ tầng. `init` không có backend (state local); `plan` ghi file `tfplan` (không commit). Dán lại dòng `Plan:`,
-   `Apply complete` và output `replication_task_arn`. RDS và replication instance chiếm phần lớn thời gian `apply`.
+   - **Mong đợi:** mọi dòng `will be created`; dòng `Plan:` bằng dòng của root ở [trang inventory][inv-root] khi account chưa có
+     role nào của DMS (inventory tính bài tạo cả hai). Mỗi role có sẵn, ghi `false` trong `dms.auto.tfvars`, bớt 2 tài nguyên (role
+     và policy attachment của nó) khỏi `to add`.
+   - **Dán lại** dòng `Plan:`.
+   - **Bẫy:** `No value for required variable` là thiếu `SVP_AWS_STG_ACCOUNT_ID` trong terminal. Lỗi validation của `rds_ca_bundle`
+     là `RDS_CA` rỗng: lấy lại bundle (mục Điều kiện trước).
+
+3. **Apply** đúng file plan đã đọc. Mong đợi `Apply complete!`; dán lại dòng đó và output `replication_task_arn`.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_rds_ca_bundle="$RDS_CA" \
-     terraform -chdir=dms-migration/terraform init
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_rds_ca_bundle="$RDS_CA" \
-     terraform -chdir=dms-migration/terraform plan -out=tfplan
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_rds_ca_bundle="$RDS_CA" \
-     terraform -chdir=dms-migration/terraform apply tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform apply -input=false dms-migration.tfplan \
+     && rm dms-migration/terraform/dms-migration.tfplan
    ```
 
-5. Chờ SSM agent và script boot của EC2 nguồn. Lệnh đầu phải in một dòng `<instance id> Online`. Lệnh sau in rỗng (chưa
-   có slot nào) và thoát 0; lỗi `No such file` nghĩa là script boot chưa xong: chờ một phút rồi chạy lại.
+4. **Plan lại**, không `-out`. Mong đợi `No changes. Your infrastructure matches the configuration.`; dòng đổi nào còn lại là lỗi code:
+   dừng, dán plan.
+
+   ```sh
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_rds_ca_bundle="$RDS_CA" \
+     terraform -chdir=dms-migration/terraform plan -input=false
+   ```
+
+5. **Chờ SSM agent và script boot của EC2 nguồn.** Lệnh đầu phải in một dòng `<instance id> Online`. Lệnh sau in rỗng (chưa có slot
+   nào) và thoát 0; lỗi `No such file` nghĩa là script boot chưa xong: chờ một phút rồi chạy lại.
 
    ```sh
    AWS_PROFILE=anhnv-stg aws ssm describe-instance-information --region ap-southeast-1 --output text \
@@ -265,20 +339,21 @@ Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run slots
    ```
 
-6. Tạo schema ở hai phía và dữ liệu mẫu ở nguồn. Dán lại ba dòng `source <bảng>: <n> rows; target <bảng>: 0 rows`.
+6. **Schema và dữ liệu mẫu.** Tạo schema ở hai phía và dữ liệu mẫu ở nguồn. Dán lại ba dòng `source <bảng>: <n> rows; target <bảng>:
+   0 rows`.
 
    ```sh
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run setup 100000 500000
    ```
 
-7. Chạy tải ghi ở nguồn rồi chạy task. Dán lại dòng `writer started` và `task svp-lab-dms: starting`.
+7. **Tải ghi rồi task.** Chạy tải ghi ở nguồn rồi chạy task. Dán lại dòng `writer started` và `task svp-lab-dms: starting`.
 
    ```sh
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run start 40
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh task start
    ```
 
-8. Theo dõi tới khi full load xong, rồi đọc thời gian full load. Chạy lệnh đầu mỗi phút tới khi nó in `full load 100 %`,
+8. **Full load.** Theo dõi tới khi full load xong, rồi đọc thời gian full load. Chạy lệnh đầu mỗi phút tới khi nó in `full load 100 %`,
    `tables loaded 3`; dán lại dòng `Full load: <n> s`. Task `failed` thì đọc nhóm log `dms-tasks-svp-lab-dms`.
 
    ```sh
@@ -286,17 +361,17 @@ Buổi chạy trong account `svp-stg` bằng profile `anhnv-stg`.
    dms-migration/scripts/session.sh fullload
    ```
 
-9. Đo độ trễ CDC dưới tải, sau khi task ở CDC ít nhất 5 phút. Dán lại dòng `CDC lag over 30 samples` và hai dòng
-   `CDCLatency...`. Lệnh `lag` mất khoảng một phút.
+9. **Độ trễ CDC dưới tải**, sau khi task ở CDC ít nhất 5 phút. Dán lại dòng `CDC lag over 30 samples` và hai dòng `CDCLatency...`.
+   Lệnh `lag` mất khoảng một phút.
 
    ```sh
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh run lag 30
    dms-migration/scripts/session.sh metrics 15
    ```
 
-10. Cutover, hạn mỗi cổng 900 s tính từ T0. Dán lại toàn bộ output: các dòng `T0`, `lag drained`, `validation:`, ba dòng
-    `compare`, `task stopping`, `T1`, `Downtime cutover`. Mã thoát 1 kèm `cutover aborted` nghĩa là một cổng không qua:
-    writer đã ghi lại vào nguồn, task vẫn chạy; dòng đó nói cổng nào.
+10. **Cutover**, hạn mỗi cổng 900 s tính từ T0. Dán lại toàn bộ output: các dòng `T0`, `lag drained`, `validation:`, ba dòng
+    `compare`, `task stopping`, `T1`, `Downtime cutover`. Mã thoát 1 kèm `cutover aborted` nghĩa là một cổng không qua: writer đã
+    ghi lại vào nguồn, task vẫn chạy; dòng đó nói cổng nào.
 
     ```sh
     SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh cutover 900
@@ -335,54 +410,214 @@ sequenceDiagram
 
 ## Dọn dẹp
 
-Chạy đủ bốn bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng.
+Chạy đủ bốn bước trước khi kết thúc buổi, kể cả khi buổi dừng giữa chừng (apply lỗi giữa chừng: mục
+[Khi apply lỗi giữa chừng](../docs/terraform-commands.md#khi-apply-lỗi-giữa-chừng)).
 
-1. Dừng writer, dừng task, gỡ slot replication ở nguồn: slot còn lại giữ WAL từ điểm task dừng. Dán lại dòng
-   `slots left: 0`. Task xoá trong destroy cũng gỡ slot do nó tạo [N1], nhưng chỉ khi DMS còn nối được nguồn.
+1. **Dừng writer, dừng task, gỡ slot replication ở nguồn:** slot còn lại giữ WAL từ điểm task dừng. Dán lại dòng `slots left: 0`.
+   Task xoá trong lượt gỡ cũng gỡ slot do nó tạo [N1], nhưng chỉ khi DMS còn nối được nguồn.
 
    ```sh
    SVP_AWS_STG_ACCOUNT_ID=$SVP_AWS_STG_ACCOUNT_ID dms-migration/scripts/session.sh cleanup
    ```
 
-2. Destroy root, cùng các biến như lúc dựng (lấy lại `RDS_CA` ở bước 3 nếu terminal đã đóng). RDS xoá không snapshot
-   cuối, không backup; secret xoá ngay; nhóm log và role do bài tạo xoá cùng. Dán lại dòng `Destroy complete`.
+2. **Plan gỡ**, đọc, rồi apply đúng file đó, cùng các biến như lúc dựng (lấy lại `RDS_CA` ở mục Điều kiện trước nếu terminal đã
+   đóng). RDS xoá không snapshot cuối, không backup; secret xoá ngay; nhóm log và role do bài tạo xoá cùng; role có sẵn trước buổi ở
+   lại.
 
    ```sh
-   AWS_PROFILE=anhnv-stg TF_VAR_account_id=$SVP_AWS_STG_ACCOUNT_ID TF_VAR_rds_ca_bundle="$RDS_CA" \
-     terraform -chdir=dms-migration/terraform destroy
+   AWS_PROFILE=anhnv-stg \
+   TF_VAR_account_id="$SVP_AWS_STG_ACCOUNT_ID" \
+   TF_VAR_rds_ca_bundle="$RDS_CA" \
+     terraform -chdir=dms-migration/terraform plan -destroy -input=false -out=dms-migration-destroy.tfplan
+   AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform show -no-color dms-migration-destroy.tfplan \
+     > "$SVP_LAB_SESSION_DIR/dms-migration-destroy-plan.txt"
+   grep -E '^\s*# .* (will|must) be|^Plan:' "$SVP_LAB_SESSION_DIR/dms-migration-destroy-plan.txt"
    ```
 
-3. Quét sót. Mong đợi mọi dòng `none` và `sweep: nothing left`; dòng `info` chỉ liệt kê hai role DMS khi chúng có trước
-   buổi. Có dòng `LEFT` thì xoá thứ đó rồi quét lại.
+   Đọc `dms-migration-destroy-plan.txt` trong thư mục buổi; đúng như mong đợi (dưới) thì sang khối sau, apply đúng file plan đã đọc:
+
+   ```sh
+   AWS_PROFILE=anhnv-stg terraform -chdir=dms-migration/terraform apply -input=false dms-migration-destroy.tfplan \
+     && rm dms-migration/terraform/dms-migration-destroy.tfplan
+   ```
+
+   - **Mong đợi:** `Plan: 0 to add, 0 to change, N to destroy.`, N bằng số `to add` của bước 2 ở [Chạy buổi](#chạy-buổi); rồi
+     `Destroy complete!`.
+   - **Dán lại** dòng `Plan:` và dòng `Destroy complete!`.
+
+3. **Quét sót**, chỉ đọc, profile và region nằm trong script. Mong đợi mọi dòng `none` và `sweep: nothing left`; dòng `info` chỉ liệt
+   kê hai role DMS khi chúng có trước buổi. Có dòng `LEFT` thì xoá thứ đó rồi quét lại; dòng `ERROR` thường là phiên SSO hết hạn: đăng
+   nhập lại rồi quét lại. Dán lại toàn bộ output.
 
    ```sh
    dms-migration/scripts/sweep.sh
    ```
 
-4. Xoá state local và plan: state không giữ mật khẩu (write-only) nhưng giữ account ID, ARN, IP và endpoint.
+4. **Xoá file của buổi** khi sweep sạch và số đo đã ghi (mục Sau buổi): state local và file plan còn sót (state không giữ mật khẩu nhờ
+   thuộc tính write-only, nhưng giữ account ID, ARN, IP và endpoint), rồi thư mục buổi. `dms.auto.tfvars` không giữ bí mật (cờ role,
+   `*_password_version` khi đã xoay mật khẩu): để lại; buổi sau dựng trên state trống nên version nào cũng tạo mật khẩu mới.
 
    ```sh
    rm -f dms-migration/terraform/terraform.tfstate dms-migration/terraform/terraform.tfstate.backup \
-     dms-migration/terraform/tfplan
+     dms-migration/terraform/*.tfplan
+   rm -rf "$SVP_LAB_SESSION_DIR"
    ```
 
-## Đề SAP
+## Sau buổi
 
-Theo exam guide SAP-C02 [N22]:
+Không viết kết luận vào trang này trước buổi. Sau buổi:
 
-- 1.1 Architect network connectivity strategies: VPC peering thay VPN hay Direct Connect, interface endpoint cho dịch vụ
-  ở subnet không route ra Internet.
-- 1.2 Prescribe security controls: role tối thiểu cho máy on-prem và cho DMS, secret mỗi endpoint, control Security Hub
-  của DMS.
-- 2.3 Determine security controls based on requirements: TLS `verify-full` tới đích, `require` với cert tự ký ở nguồn,
-  mật khẩu write-only.
-- 2.6 Determine a cost optimization strategy: replication instance so với Serverless, endpoint so với IP công khai và
-  NAT, đặt mọi thứ cùng AZ.
-- 4.1 Select existing workloads and processes for potential migration: đánh giá theo 7 chiến lược ở
-  [`docs/migration-strategies.md`](docs/migration-strategies.md).
-- 4.2 Determine the optimal migration approach for existing workloads: DMS full load và CDC so với logical replication
-  gốc và dump/restore; bảo mật công cụ migration.
-- 4.3 Determine a new architecture for existing workloads: PostgreSQL tự quản trên EC2 so với RDS.
+- **Số đo cần ghi**, kèm mốc UTC mà script in: thời gian full load (bước 8 của [Chạy buổi](#chạy-buổi)); median, max của độ trễ CDC
+  và max, trung bình của `CDCLatencySource`, `CDCLatencyTarget` (bước 9); downtime cutover cùng số giây của từng cổng: CDC rút hết,
+  validation, đối chiếu, lần ghi đầu (bước 10); kết quả đối chiếu ba bảng.
+- **Trang so sánh:** thêm số đo vào dòng AWS DMS của [`docs/migration-strategies.md`](docs/migration-strategies.md) khi số đổi cách
+  chọn ở đó.
+- **ADR mới ở `svp-backend`** nhận kết luận: đường chuyển một database vào RDS của svp và downtime chấp nhận được; README này thêm mục
+  kết luận trỏ tới ADR đó.
+
+## Ôn SAP-C03
+
+Task statement của exam guide SAP-C03 [N22] mà bài phục vụ:
+
+- 1.3 Design hybrid cloud integration patterns: VPC peering đóng vai đường riêng tới on-prem; Site-to-Site VPN, Direct Connect ở
+  [bài `multi-account-networking`](https://github.com/anhnvcoder/svp-labs/tree/main/multi-account-networking).
+- 1.4 Design network architectures: hai VPC nối peering, subnet private không route ra Internet, interface endpoint.
+- 2.1 Design identity security architectures: role tối thiểu cho máy on-prem và cho DMS, secret riêng mỗi endpoint.
+- 2.2 Design solutions to implement encryption and key management strategies: TLS `verify-full` tới đích theo bundle CA của RDS,
+  `require` với cert tự ký ở nguồn.
+- 3.1 Design architectures based on AWS pricing models: replication instance so với DMS Serverless.
+- 3.2 Optimize data transfer and network costs: interface endpoint so với IP công khai và NAT Gateway, mọi instance cùng AZ.
+- 4.1 Design migration strategies by using AWS frameworks: DMS full load và CDC, replatform PostgreSQL tự quản sang RDS, 7 chiến
+  lược ở [`docs/migration-strategies.md`](docs/migration-strategies.md).
+- 5.1 Design infrastructure as code: mật khẩu sinh ephemeral, ghi write-only vào Secrets Manager và Parameter Store.
+
+### 1. Chuyển database đang ghi với downtime vài phút (task 4.1)
+
+Một công ty chạy PostgreSQL 17 tự quản trong data center, đã có đường mạng riêng tới VPC. Họ muốn chuyển sang RDS for PostgreSQL.
+Yêu cầu: ứng dụng vẫn ghi trong lúc chuyển, chỉ dừng ghi vài phút lúc chuyển hẳn, có cách chứng minh dữ liệu hai phía khớp.
+
+- A. `pg_dump` nguồn rồi `pg_restore` vào RDS trong một cửa sổ bảo trì.
+- B. Task DMS full load và CDC, bật validation; chuyển ứng dụng khi CDC đã áp hết và validation báo khớp.
+- C. AWS Application Migration Service (MGN) chép máy chủ database sang EC2.
+- D. AWS DataSync chép thư mục dữ liệu của PostgreSQL sang AWS rồi khởi động RDS từ đó.
+
+**Đáp án:** B. Full load chép dữ liệu hiện có, CDC áp các thay đổi ghi trong lúc đó và sau đó [N1], validation so từng bảng [N9];
+ghi chỉ dừng trong cutover.
+
+**Vì sao không phải:**
+
+- A: dừng ghi suốt lúc dump và restore (bảng lựa chọn ở mục [Thiết kế](#thiết-kế)).
+- C: rehost, máy đích vẫn là PostgreSQL tự quản trên EC2, không phải RDS ([`docs/migration-strategies.md`](docs/migration-strategies.md)).
+- D: RDS không khởi động từ thư mục dữ liệu chép vào; chép file của database đang ghi cũng không nhất quán.
+
+**Trong lab:** bước 6–10 của [Chạy buổi](#chạy-buổi); số đo ở mục [Đo gì](#đo-gì).
+
+### 2. DMS trong subnet private đọc credential của endpoint (task 1.4, 3.2)
+
+Replication instance nằm ở subnet private không route ra Internet. Endpoint nguồn và đích đọc username, password từ Secrets Manager,
+nhưng task lỗi vì không lấy được secret. Yêu cầu: không mở đường ra Internet, phí thấp, không fail control Security Hub của DMS.
+
+- A. Bật `publicly_accessible` cho replication instance.
+- B. Thêm NAT Gateway ở subnet public và route `0.0.0.0/0` của subnet private qua nó.
+- C. Interface endpoint của Secrets Manager trong VPC, `secretsManagerEndpointOverride` ở endpoint DMS, security group chỉ nhận 443
+  từ DMS.
+- D. Gateway endpoint cho Secrets Manager.
+
+**Đáp án:** C. DMS ở subnet private đọc secret qua VPC endpoint, khai bằng `secretsManagerEndpointOverride` [N3]; một AZ 0,013 USD
+mỗi giờ [P4].
+
+**Vì sao không phải:**
+
+- A: instance công khai fail control `DMS.1` mức Critical [N14], và vẫn cần route ra Internet.
+- B: mở đường ra Internet; NAT Gateway 0,059 USD mỗi giờ [P3], gấp hơn bốn lần endpoint, chưa tính phí dữ liệu.
+- D: gateway endpoint chỉ có cho Amazon S3 và DynamoDB [N23].
+
+**Trong lab:** `aws_vpc_endpoint.secretsmanager` và `local.secrets_override` ở `modules/dms/main.tf`; so ba đường ở mục
+[Chi phí](#chi-phí).
+
+### 3. Replication instance hay DMS Serverless cho một lần chuyển (task 3.1)
+
+Một lần chuyển 600 000 dòng, buổi khoảng 3 giờ. Mọi bảng có khoá chính kiểu `uuid` và phải được validation. Yêu cầu: phí thấp nhất.
+
+- A. DMS Serverless, capacity tối thiểu 1 DCU.
+- B. Replication instance `dms.t3.micro` Single-AZ, engine 3.6.1.
+- C. Replication instance Multi-AZ, class lớn để chắc chắn đủ.
+- D. DMS Serverless, đặt capacity tối đa thấp để giới hạn phí.
+
+**Đáp án:** B. Cả buổi kèm lưu trữ ~0,095 USD so với ít nhất ~0,37 USD của Serverless [P2]; engine 3.6.1 validate được bảng khoá
+`uuid` [N8].
+
+**Vì sao không phải:**
+
+- A: ít nhất 1 DCU, 0,122 USD mỗi giờ [P2], [N11]; Serverless chạy engine 3.5.4, chưa validate bảng khoá `uuid` [N8], [N11].
+- C: trả thêm instance dự phòng và class lớn cho một task chạy lại được khi lỗi, với lượng dữ liệu nhỏ.
+- D: capacity tối đa không hạ mức tối thiểu 1 DCU, và vẫn là engine 3.5.4 [N11].
+
+**Trong lab:** bảng so replication instance với DMS Serverless ở mục [Thiết kế](#thiết-kế).
+
+### 4. Thứ tự của cutover (task 4.1)
+
+Task full load và CDC đang chạy, ứng dụng vẫn ghi vào nguồn. Đội vận hành cần chuyển ứng dụng sang đích. Yêu cầu: không mất ghi nào,
+có bằng chứng dữ liệu khớp trước khi ghi vào đích.
+
+- A. Chuyển ứng dụng ghi vào đích ngay khi full load xong, để task CDC chạy tiếp vài giờ cho chắc.
+- B. Dừng ghi ở nguồn, chờ CDC áp hết, chờ validation không còn bản ghi pending hay failed, đối chiếu, dừng task, rồi chuyển ghi.
+- C. Dừng task trước, rồi dừng ghi ở nguồn, rồi chuyển ghi sang đích.
+- D. Chuyển một nửa lượng ghi sang đích, nửa còn lại ở nguồn, rồi chuyển hẳn sau một ngày.
+
+**Đáp án:** B. Validation chỉ báo đúng khi đích không bị ghi ngoài DMS [N9]; dừng ghi trước và chờ CDC rút hết thì mọi thay đổi đã
+tới đích trước khi task dừng.
+
+**Vì sao không phải:**
+
+- A: ghi vào đích lúc task còn chạy làm validation báo sai [N9], và thay đổi CDC tới sau có thể ghi đè ghi mới.
+- C: các câu ghi giữa lúc task dừng và lúc ứng dụng dừng không bao giờ tới đích.
+- D: hai nơi cùng nhận ghi; CDC chỉ một chiều, ghi ở đích không về nguồn.
+
+**Trong lab:** bước 10 của [Chạy buổi](#chạy-buổi) (`pgload.sh cutover` và các cổng của nó); ý "Cutover là quy trình có cổng" ở mục
+[Thiết kế](#thiết-kế).
+
+### 5. Đích RDS trong lúc full load (task 4.1)
+
+Full load vào RDS for PostgreSQL chậm hơn dự tính. Đích đang chạy Multi-AZ, giữ automated backup 7 ngày. Yêu cầu: giữ RDS for
+PostgreSQL, rút ngắn full load, không đổi ứng dụng.
+
+- A. Tắt Multi-AZ và automated backup của đích tới cutover, bật lại trước khi chuyển ứng dụng.
+- B. Đổi đích sang Aurora PostgreSQL.
+- C. Bật `CaptureDdls` ở endpoint nguồn.
+- D. Để DMS tự tạo bảng ở đích thay cho schema tạo trước.
+
+**Đáp án:** A. Tài liệu best practice của DMS khuyên tắt backup và Multi-AZ của đích tới cutover [N13].
+
+**Vì sao không phải:**
+
+- B: đổi engine đích, trái ràng buộc giữ RDS for PostgreSQL.
+- C: `CaptureDdls` thu DDL ở nguồn, không liên quan tốc độ ghi ở đích, và thêm trigger, bảng phụ ở nguồn [N1].
+- D: DMS chỉ tạo bảng và khoá chính, không index phụ [N13]; ứng dụng chạy trên schema thiếu index.
+
+**Trong lab:** `backup_retention_period = 0`, `multi_az = false` ở `modules/target-db/main.tf`; dòng "Đích" ở bảng lựa chọn của mục
+[Thiết kế](#thiết-kế).
+
+### 6. Ổ đĩa nguồn đầy khi task dừng (task 4.1, 4.3)
+
+Nguồn là PostgreSQL tự quản, task CDC của DMS bị dừng qua cuối tuần. Sáng thứ hai ổ đĩa nguồn đầy WAL và PostgreSQL dừng. Yêu cầu:
+lần sau một task bị bỏ quên không làm dừng database nguồn.
+
+- A. Đặt `max_slot_wal_keep_size` ở nguồn; gỡ slot replication khi bỏ task.
+- B. Tăng `wal_sender_timeout`.
+- C. Đổi plugin của endpoint từ `test_decoding` sang `pglogical`.
+- D. Tắt validation của task.
+
+**Đáp án:** A. Slot giữ WAL tới khi bên đọc xác nhận đã nhận [N24]; `max_slot_wal_keep_size` giới hạn lượng đó: vượt ngưỡng thì task
+DMS lỗi thay vì server dừng [N1], [N25].
+
+**Vì sao không phải:**
+
+- B: timeout của kết nối gửi WAL, không giới hạn WAL mà slot giữ [N25].
+- C: plugin nào cũng đọc qua slot, slot vẫn giữ WAL [N1].
+- D: validation đọc dữ liệu hai phía, không giữ WAL.
+
+**Trong lab:** `max_slot_wal_keep_size = 2GB` ở `terraform/user-data.sh.tftpl`; bước 1 của [Dọn dẹp](#dọn-dẹp) gỡ slot.
 
 ## Kiểm offline
 
@@ -394,6 +629,7 @@ make shellcheck DIRS=dms-migration
 bash dms-migration/scripts/pgload-test.sh
 bash dms-migration/scripts/session-test.sh
 make docs-check DOCS='dms-migration/**/*.md'
+make diagrams-check NAMES=dms-migration
 make lock DIRS=dms-migration  # only when the root changes its providers
 ```
 
@@ -412,6 +648,8 @@ make lock DIRS=dms-migration  # only when the root changes its providers
   `slots`, `drop-slots`); `scripts/pgload-test.sh`.
 - `scripts/session.sh`: chạy trên máy người học (`check`, `run`, `task`, `fullload`, `metrics`, `cutover`, `cleanup`);
   `scripts/session-test.sh`.
+- [`docs/inventory.md`](docs/inventory.md): tài nguyên root tạo trên account trống, sinh bằng `make inventory`.
+- `../docs/diagrams/dms-migration/overview.d2`: sơ đồ của mục Thiết kế, sinh SVG bằng `make diagrams`.
 - `scripts/sweep.sh`: quét sót, chỉ đọc.
 - Tên và tag mà script tra cứu: tag `Lab = dms-migration`, tiền tố `svp-lab-dms`; tag `Name` của EC2
   `svp-lab-dms-source`; RDS `svp-lab-dms-target`; replication instance và task `svp-lab-dms`; endpoint
@@ -473,8 +711,14 @@ Tài liệu đọc 2026-11-17.
   <https://docs.aws.amazon.com/linux/al2023/release-notes/all-packages-AL2023.12.html>
 - [N21] Amazon RDS, Using SSL/TLS to encrypt a connection to a DB instance (bundle CA theo region):
   <https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html>
-- [N22] AWS Certified Solutions Architect - Professional (SAP-C02) exam guide:
-  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-02/solutions-architect-professional-02.html>
+- [N22] AWS Certified Solutions Architect - Professional (SAP-C03) exam guide (đọc 2026-11-22):
+  <https://docs.aws.amazon.com/aws-certification/latest/solutions-architect-professional-03/solutions-architect-professional-03.html>
+- [N23] AWS PrivateLink, Gateway endpoints (chỉ Amazon S3 và DynamoDB; đọc 2026-11-22):
+  <https://docs.aws.amazon.com/vpc/latest/privatelink/gateway-endpoints.html>
+- [N24] PostgreSQL 17, Replication Slots (slot giữ WAL tới khi bên đọc nhận; đọc 2026-11-22):
+  <https://www.postgresql.org/docs/17/warm-standby.html#STREAMING-REPLICATION-SLOTS>
+- [N25] PostgreSQL 17, Replication settings (`max_slot_wal_keep_size`, `wal_sender_timeout`; đọc 2026-11-22):
+  <https://www.postgresql.org/docs/17/runtime-config-replication.html>
 
 Giá đọc 2026-11-17 (file Price List bulk công khai, trang giá):
 

@@ -1,5 +1,12 @@
 # Lab `dora/` — năm chỉ số DORA tính từ bản ghi triển khai
 
+Bài hỏi: năm chỉ số DORA có tính được từ bản ghi Deployment `stg` của `svp-gitops` không. Kết luận: tính được ([ADR-0028][adr-0028]),
+nhưng stg của lab dựng rồi xoá mỗi lượt nên số đo nhịp lượt chạy hơn là giao hàng, và DORA rời đường chính ([ADR-0037][adr-0037], thay
+ADR-0028). Đây là bản đóng băng, không bảo trì tiếp.
+
+[adr-0028]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0028-dora-metrics.md
+[adr-0037]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0037-mainpath-standard-tools.md
+
 Bản **đóng băng** của `dora.sh` và `dora-test.sh`, chép nguyên văn (không sửa) từ `anhnvcoder/svp-backend` ở commit
 `344da5f7a602e74c5c02efdafb3e25064fea2e1c` (`origin/main`, đường `deploy/ci/dora.sh`, `deploy/ci/dora-test.sh`). Dựng một lần, không bảo trì:
 sửa ở đây là sửa bản học, không phải bản chạy ở stg hay prd.

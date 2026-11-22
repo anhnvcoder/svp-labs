@@ -85,7 +85,7 @@ resource "aws_db_instance" "this" {
 # Lives in the destination Region, as RDS requires; destroying it stops the replication but keeps the replicated
 # backups until their retention ends, so the lab deletes them after the destroy.
 resource "aws_db_instance_automated_backups_replication" "this" {
-  count = var.replicate_backups_from != null ? 1 : 0
+  count = var.replicate_backups ? 1 : 0
 
   source_db_instance_arn = var.replicate_backups_from
   kms_key_id             = var.kms_key_arn

@@ -1,0 +1,138 @@
+# The two flows of serverless-variant/terraform in one picture, each a snake over two rows: the view counter on
+# top, the transcode orchestration below; every block is one resource of the root or its modules, named as in Terraform.
+vars: {d2-config: {layout-engine: elk; pad: 20}}
+...@../tokens
+
+title: "Một lượt xem và một upload đi qua những dịch vụ nào?" {
+  shape: text
+  near: top-center
+  style: {font-size: 18; bold: true}
+}
+
+all: "" {
+  grid-rows: 1
+  grid-columns: 3
+  grid-gap: 0
+  style: {stroke: transparent; fill: transparent}
+
+  lcol: "" {
+    grid-rows: 3
+    grid-columns: 1
+    grid-gap: 0
+    style: {stroke: transparent; fill: transparent}
+    sp: "" {width: 150; height: 520; style: {stroke: transparent; fill: transparent}}
+    learner: "Máy người học" {
+      class: workload
+      grid-rows: 1
+      s: "curl · k6 ·\nmeasure.sh" {class: sub}
+    }
+    lfill: "" {style: {stroke: transparent; fill: transparent}}
+  }
+
+  gap: "" {width: 270; style: {stroke: transparent; fill: transparent}}
+
+  stg: "Account svp-stg" {
+    class: account
+    label.near: top-left
+
+    aps1: "ap-southeast-1, không VPC" {
+      class: region
+      label.near: top-left
+      grid-rows: 4
+      grid-columns: 3
+      horizontal-gap: 100
+      vertical-gap: 60
+
+      api: "API Gateway" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "REST API\nsvp-lab-sls-views" {shape: image; icon: ../icons/api-gateway.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "stage lab · 50 rps,\nburst 100 · role\nsvp-lab-sls-views-api" {class: sub}
+      }
+      q: "SQS standard" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-views" {shape: image; icon: ../icons/sqs.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "giữ 1 ngày · visibility\n181 s" {class: sub}
+      }
+      counter: "Lambda" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-counter" {shape: image; icon: ../icons/lambda.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "Go · arm64 · 128 MB · log\n/aws/lambda/…: dòng EMF\nEndToEndLatencyMs,\nDuplicatesSkipped" {class: sub}
+      }
+      e1: "" {style: {stroke: transparent; fill: transparent}}
+      dlq: "SQS DLQ" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-views-dlq" {shape: image; icon: ../icons/sqs.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "giữ 14 ngày" {class: sub}
+      }
+      table: "DynamoDB" {
+        class: data
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-views" {shape: image; icon: ../icons/dynamodb.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "on-demand · khoá pk ·\nTTL expires_at" {class: sub}
+      }
+      bucket: "S3" {
+        class: data
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-uploads-\n<account>-ap-southeast-1" {shape: image; icon: ../icons/s3.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "SSE-S3 · gửi event\nsang EventBridge" {class: sub}
+      }
+      default: "EventBridge" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "bus default" {shape: image; icon: ../icons/eventbridge.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "rule svp-lab-sls-\nupload-created" {class: sub}
+      }
+      sfn: "Step Functions" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-transcode" {shape: image; icon: ../icons/step-functions.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "Standard · JSONata ·\nRetry, Catch" {class: sub}
+      }
+      logs: "CloudWatch" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "/aws/events/\nsvp-lab-sls-transcode" {shape: image; icon: ../icons/cloudwatch.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "log group, giữ 1 ngày" {class: sub}
+      }
+      bus: "EventBridge" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "bus svp-lab-sls" {shape: image; icon: ../icons/eventbridge.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "rule svp-lab-sls-\ntranscode-events" {class: sub}
+      }
+      tx: "Lambda" {
+        class: workload
+        grid-rows: 2
+        grid-gap: 8
+        i: "svp-lab-sls-transcode" {shape: image; icon: ../icons/lambda.svg; width: 48; height: 48; style: {font-color: "#1A1A1A"; font-size: 13; bold: false}}
+        s: "Go · arm64 · 128 MB" {class: sub}
+      }
+    }
+  }
+}
+
+all.lcol.learner -> all.stg.aps1.api: "POST /videos/\n{id}/views" {class: data-flow}
+all.stg.aps1.api -> all.stg.aps1.q: "Send\nMessage" {class: data-flow}
+all.stg.aps1.q -> all.stg.aps1.counter: "lô 100\nhay 1 s" {class: data-flow}
+all.stg.aps1.q -> all.stg.aps1.dlq: "nhận 5 lần không xong" {class: data-flow}
+all.stg.aps1.counter -> all.stg.aps1.table: "TransactWriteItems" {class: data-flow}
+all.lcol.learner -> all.stg.aps1.bucket: "PUT uploads/\n<id>.mp4" {class: data-flow}
+all.stg.aps1.bucket -> all.stg.aps1.default: "Object\nCreated" {class: data-flow}
+all.stg.aps1.default -> all.stg.aps1.sfn: "Start\nExecution" {class: control-flow}
+all.stg.aps1.sfn -> all.stg.aps1.tx: "Invoke" {class: control-flow}
+all.stg.aps1.sfn -> all.stg.aps1.bus: "PutEvents transcode.\ncompleted, failed" {class: data-flow}
+all.stg.aps1.bus -> all.stg.aps1.logs: "mọi event" {class: data-flow}

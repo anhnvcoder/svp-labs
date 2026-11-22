@@ -1,7 +1,12 @@
 # attest-spike: Kyverno đang ghim có xác minh được provenance của `actions/attest` không
 
-Spike một lần, trả lời trước khi đổi định dạng build provenance của đường chính từ `cosign attest --type slsaprovenance1` (predicate do script
-của `svp-backend` dựng, ADR-0027 của `svp-backend`) sang `actions/attest` (Sigstore bundle, đẩy vào registry bằng `push-to-registry: true`).
+Bài hỏi: Kyverno đang ghim có xác minh được provenance của `actions/attest` (Sigstore bundle) không, trước khi đổi định dạng của đường
+chính từ `cosign attest --type slsaprovenance1` ([ADR-0027][adr-0027], bị ADR-0040 thay). Kết luận: có, một policy nhận được cả hai
+định dạng, nhưng một image không được lẫn hai: chữ ký, `vuln`, provenance sang bundle cùng một bản phát hành ([ADR-0040][adr-0040]).
+Spike một lần, không bảo trì tiếp.
+
+[adr-0027]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0027-slsa-build-provenance.md
+[adr-0040]: https://github.com/anhnvcoder/svp-backend/blob/main/docs/adr/0040-sigstore-bundle-actions-attest.md
 
 **Trạng thái: đã thử (2026-11-01), bằng Kyverno CLI đúng bản lab chạy (v1.19.1), chạy lại cả bộ bằng v1.19.2, kết quả giống hệt.** CLI đánh giá
 được các hàm xác minh image của `ImageValidatingPolicy` (gọi registry và Sigstore thật), nên không dựng cluster `svp-spike`.
